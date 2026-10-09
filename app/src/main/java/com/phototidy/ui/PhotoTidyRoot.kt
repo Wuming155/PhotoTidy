@@ -372,6 +372,7 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                                     onRestore = libraryVm::restoreFromSystemTrash,
                                     onDelete = libraryVm::deleteFromSystemTrash,
                                     onLoadMore = libraryVm::loadMoreTrash,
+                                    onLoadAll = libraryVm::loadAllTrash,
                                     loadingMore = libraryState.trashLoadingMore,
                                     loadError = libraryState.trashLoadError,
                                     onRetry = libraryVm::loadMoreTrash,

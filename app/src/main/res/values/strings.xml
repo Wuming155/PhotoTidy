@@ -80,6 +80,8 @@
     <string name="trash_empty_title">回收站是空的</string>
     <string name="trash_empty_desc">在整理页点「提交」之后，被清除的照片会出现在这里。</string>
     <string name="trash_select_hint">先勾选要处理的照片</string>
+    <string name="trash_select_all">全选</string>
+    <string name="trash_deselect_all">取消全选</string>
     <string name="action_restore">还原到相册</string>
     <string name="action_delete_forever">彻底删除</string>
     <string name="trash_delete_title">确认彻底删除这 %1$d 张？</string>

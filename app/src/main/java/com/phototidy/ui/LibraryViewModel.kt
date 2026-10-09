@@ -138,25 +138,48 @@ class LibraryViewModel(
 
     /** 系统回收站向下翻页。 */
     fun loadMoreTrash() {
-        val current = _state.value
-        if (current.trashLoadingMore) return
-        if (current.trash.size >= current.trashCount) return
-        _state.update { it.copy(trashLoadingMore = true, trashLoadError = false) }
+        if (_state.value.trashLoadingMore) return
+        if (_state.value.trash.size >= _state.value.trashCount) return
+        viewModelScope.launch { loadNextTrashPage() }
+    }
+
+    /**
+     * 一次性把回收站剩下的页全读完。
+     *
+     * 给「全选」用：全选必须选中回收站里的**每一张**，而列表是分页的，
+     * 只选已加载的那几页就成了「选了一部分却说是全选」——那比没有全选更误导。
+     *
+     * 靠 [loadNextTrashPage] 里的 `size >= trashCount` 判据收口，不会无限翻页；
+     * `trashLoadingMore` 兼作互斥锁，与 [loadMoreTrash] 不会并发抓同一页。
+     */
+    fun loadAllTrash() {
+        if (_state.value.trashLoadingMore) return
         viewModelScope.launch {
-            val next = runCatching { repo.pageTrashed(current.trash.size, TRASH_PAGE_SIZE) }
-                .getOrDefault(emptyList())
-            _state.update {
-                it.copy(
-                    trash = it.trash + next,
-                    // 取不满一页说明到头了；把真实条数收敛一下，避免滚动到底还在请求
-                    trashCount = if (next.size < TRASH_PAGE_SIZE) it.trash.size + next.size else it.trashCount,
-                    trashLoadingMore = false,
-                    // 期望还有更多却空手而归 = 本次加载失败。置位让 UI 给出重试入口，
-                    // 否则 LaunchedEffect(systemTrash.size) 因 size 不变不再触发，spinner 会一直转（见 FYI2）。
-                    trashLoadError = next.isEmpty() && it.trash.size < it.trashCount,
-                )
+            while (loadNextTrashPage() == TRASH_PAGE_SIZE) {
+                // 取满一页说明后面还有，继续；取不满或取空都在下一轮判据里自然收口
             }
         }
+    }
+
+    /** 读下一页，返回本页实际条数（0 = 到底了或读取失败）。 */
+    private suspend fun loadNextTrashPage(): Int {
+        val current = _state.value
+        if (current.trash.size >= current.trashCount) return 0
+        _state.update { it.copy(trashLoadingMore = true, trashLoadError = false) }
+        val next = runCatching { repo.pageTrashed(current.trash.size, TRASH_PAGE_SIZE) }
+            .getOrDefault(emptyList())
+        _state.update {
+            it.copy(
+                trash = it.trash + next,
+                // 取不满一页说明到头了；把真实条数收敛一下，避免滚动到底还在请求
+                trashCount = if (next.size < TRASH_PAGE_SIZE) it.trash.size + next.size else it.trashCount,
+                trashLoadingMore = false,
+                // 期望还有更多却空手而归 = 本次加载失败。置位让 UI 给出重试入口，
+                // 否则 LaunchedEffect(systemTrash.size) 因 size 不变不再触发，spinner 会一直转（见 FYI2）。
+                trashLoadError = next.isEmpty() && it.trash.size < it.trashCount,
+            )
+        }
+        return next.size
     }
 
     /**
