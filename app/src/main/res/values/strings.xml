@@ -185,9 +185,6 @@
     <string name="stamp_undo">撤销上一个动作</string>
     <string name="stamp_armed">松手生效</string>
 
-    <!-- ============================================================ 快捷移动条 -->
-    <string name="quick_move_hint">点一下，把这张放进对应文件夹</string>
-
     <!-- ============================================================ 帮助 -->
     <string name="help_title">怎么用</string>
     <string name="help_subtitle">整页只有一张照片，按方向做决定就行。</string>
@@ -197,7 +194,7 @@
     <string name="help_trash_body">先排进回收站，等最后提交时统一确认</string>
     <string name="help_undo_title">向下滑</string>
     <string name="help_undo_body">撤销上一个动作，后悔药永远在手边</string>
-    <string name="help_move_title">点下方文件夹</string>
+    <string name="help_move_title">点下方箭头</string>
     <string name="help_move_body">把这张排进对应相册，同样等提交时一起生效</string>
     <string name="help_footer">在你点「确认删除」之前，照片库不会有任何变化。</string>
 

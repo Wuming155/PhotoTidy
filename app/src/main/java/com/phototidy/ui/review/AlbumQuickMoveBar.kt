@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -14,8 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.FolderOpen
-import androidx.compose.material.icons.rounded.South
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -24,10 +22,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.phototidy.R
 import com.phototidy.core.model.MediaAlbum
 import com.phototidy.ui.components.photosLabel
 import com.phototidy.ui.theme.BottomSheetShape
@@ -37,8 +33,8 @@ import com.phototidy.ui.theme.BottomSheetShape
  *
  * 这是整个应用里最高频的第二个动作，所以它的位置和形态都很讲究：
  *  · 贴在最底部，拇指自然落点；
- *  · 每一个目标都是独立的 64dp 宽触控区，不会误触相邻项；
- *  · 用「箭头钻入文件夹」的图标而不是缩略图 —— 这里是「动作」不是「浏览」，
+ *  · 每一个目标都是独立的 72dp 宽触控区，不会误触相邻项；
+ *  · 用「下载箭头落到横线」的图标而不是缩略图 —— 这里是「动作」不是「浏览」，
  *    放缩略图反而会让用户以为点下去是打开相册。
  */
 @Composable
@@ -54,28 +50,6 @@ fun AlbumQuickMoveBar(
         modifier = modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.padding(top = 12.dp, bottom = 10.dp)) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.South,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(15.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = stringResource(R.string.quick_move_hint),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            Spacer(Modifier.height(6.dp))
-
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -116,7 +90,7 @@ private fun AlbumMoveTarget(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.FolderOpen,
+                    imageVector = Icons.Rounded.Download,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(22.dp),

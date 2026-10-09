@@ -14,7 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.South
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.West
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -90,7 +90,7 @@ fun HelpSheet(
                 body = stringResource(R.string.help_undo_body),
             )
             GestureRow(
-                icon = Icons.Rounded.South,
+                icon = Icons.Rounded.Download,
                 tint = MaterialTheme.colorScheme.primary,
                 title = stringResource(R.string.help_move_title),
                 body = stringResource(R.string.help_move_body),
