@@ -39,8 +39,6 @@ data class ReviewUiState(
     val preparing: Boolean = false,
     val moveTargets: List<MediaAlbum> = emptyList(),
     val keptCount: Int = 0,
-    val trashedCount: Int = 0,
-    val movedCount: Int = 0,
     val submitting: Boolean = false,
     val submittingLabel: String = "",
     /** 本次会话的改动已经提交到系统相册 */
@@ -53,6 +51,16 @@ data class ReviewUiState(
     val pendingTotal: Int get() = stagedCount + pendingMoveCount
 
     val hasPending: Boolean get() = pendingTotal > 0
+
+    /**
+     * 「回收站 / 移动」两个统计值直接由队列派生。
+     *
+     * 它们曾经是与队列并列的字段、只在 `syncState()` 里赋值 —— 于是「进入一个已经结束的范围」
+     * 这条不经过任何动作的路径会显示陈旧值：卡片写「回收站 0」，下面一行却写着
+     * 「已排队 回收 4 张」。派生之后两者在物理上不可能背离。
+     */
+    val trashedCount: Int get() = stagedCount
+    val movedCount: Int get() = pendingMoveCount
 }
 
 /** 一次从 MediaStore 取多少张。 */
@@ -126,8 +134,8 @@ class ReviewViewModel(
     private val pendingMoves = LinkedHashMap<Long, PendingMove>()
 
     // ---- 增量计数器：syncState() 必须是 O(1) ----
-    // trashedCount / movedCount 不再单独维护：直接在 syncState() 里由 staging.items / pendingMoves 派生，
-    // 从根上消除「计数器与队列背离」（见 Nit5）。
+    // 回收站 / 移动的数量不在这里维护，也不在 syncState() 里赋值，而是直接由
+    // staging / pendingMoves 派生（见 ReviewUiState）—— 从根上消除「计数器与队列背离」。
     private var processedCount = 0
     private var keptCount = 0
 
@@ -383,9 +391,6 @@ class ReviewViewModel(
                 finished = remainingCount() == 0,
                 preparing = at(0) == null && remainingCount() > 0,
                 keptCount = keptCount,
-                // 直接由队列大小派生，队列与计数永不背离（见 Nit5）
-                trashedCount = staging.items.value.size,
-                movedCount = pendingMoves.size,
                 // 「已经产生过非保留改动、且全部结算完」——用计数器判断，不再遍历历史
                 committed = it.committed || (pendingMoves.isEmpty() &&
                     staging.items.value.isEmpty() &&

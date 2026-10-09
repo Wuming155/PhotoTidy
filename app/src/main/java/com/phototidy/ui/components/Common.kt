@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,6 +40,13 @@ import com.phototidy.core.model.MediaImage
  * 统一的图片加载入口。
  *
  * 之所以包一层：以后要换加载库、要加统一的占位色/错误态，只改这一处。
+ *
+ * [crossfade] **默认关闭**。淡入会让每个 tile 多持有一份旧位图并多走一层合成，
+ * 缩略图网格滚动时逐块淡入在低端机上表现为「糊 / 拖」，收益为负；
+ * 只有大图（整理页卡片、首页封面）淡入才有意义，那些调用点显式开启。
+ *
+ * 请求对象用 `remember` 缓存：否则每次重组都会新建一个 `ImageRequest`，
+ * 而整理卡片在拖动过程中是逐帧重组的（见 `SwipeablePhotoCard`）。
  */
 @Composable
 fun LibraryImage(
@@ -46,6 +54,7 @@ fun LibraryImage(
     contentDescription: String?,
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
+    crossfade: Boolean = false,
 ) {
     if (image == null) {
         Box(
@@ -53,11 +62,16 @@ fun LibraryImage(
         )
         return
     }
+    val context = LocalContext.current
+    val uri = image.uri
+    val request = remember(context, uri, crossfade) {
+        ImageRequest.Builder(context)
+            .data(Uri.parse(uri))
+            .crossfade(crossfade)
+            .build()
+    }
     AsyncImage(
-        model = ImageRequest.Builder(LocalContext.current)
-            .data(Uri.parse(image.uri))
-            .crossfade(true)
-            .build(),
+        model = request,
         contentDescription = contentDescription,
         contentScale = contentScale,
         modifier = modifier,

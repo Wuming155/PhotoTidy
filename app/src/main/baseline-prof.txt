@@ -1,0 +1,87 @@
+# PhotoTidy 应用自身的 baseline profile。
+#
+# 背景：release 构建本来就会合并依赖库（Compose / AndroidX / Lifecycle / Coil）随 AAR
+# 带来的 profile，但 `com/phototidy` 的覆盖一直是 0 —— 也就是说 Compose 自己的关键路径
+# 是 AOT 的，应用自己的代码（Application/Activity 入口、依赖容器、设置同步读取、
+# 主题构建、首次扫描、首帧）却仍然要冷启动时现 JIT。低端机上「第一次打开什么都慢一下」
+# 主要就是这一段。
+#
+# 这份文件的来源与局限：
+#  · 类名不是手写猜的 —— 是从 `app/build/tmp/kotlin-classes/<variant>/com/phototidy`
+#    里实际编译出来的 .class 文件枚举出来的（lambda 类折叠到其顶层类的 `**` 通配里），
+#    所以每一行都对应真实存在的类。
+#  · 但它是**粗粒度**的（类级通配 + 全方法），不是 Macrobenchmark 在真机上跑出来的
+#    带调用序/热度的 profile。精度不如生成版，收益也不如生成版稳。
+#  · 后续接入 `androidx.baselineprofile` + 一个 macrobenchmark 模块、在真机上跑一次
+#    `StartupBaselineProfile` 之后，这份手写文件应当被生成的版本取代并删除。
+#
+# AGP 会自动读取 src/main/baseline-prof.txt，并在 release 构建时与依赖库的 profile 合并。
+HSPLcom/phototidy/ComposableSingletons;->**(**)**
+HSPLcom/phototidy/Graph;->**(**)**
+HSPLcom/phototidy/MainActivity;->**(**)**
+HSPLcom/phototidy/MainActivityKt;->**(**)**
+HSPLcom/phototidy/PhotoTidyApp;->**(**)**
+HSPLcom/phototidy/core/ResourcesStringProvider;->**(**)**
+HSPLcom/phototidy/core/StringProvider;->**(**)**
+HSPLcom/phototidy/core/media/ConsentKind;->**(**)**
+HSPLcom/phototidy/core/media/LibraryOverview;->**(**)**
+HSPLcom/phototidy/core/media/MediaAccess;->**(**)**
+HSPLcom/phototidy/core/media/MediaOpCoordinator;->**(**)**
+HSPLcom/phototidy/core/media/MediaOpResult;->**(**)**
+HSPLcom/phototidy/core/media/MediaPermissions;->**(**)**
+HSPLcom/phototidy/core/media/MediaRepository;->**(**)**
+HSPLcom/phototidy/core/media/MediaStoreRepository;->**(**)**
+HSPLcom/phototidy/core/media/MediaStoreRepositoryKt;->**(**)**
+HSPLcom/phototidy/core/media/RealSessionStore;->**(**)**
+HSPLcom/phototidy/core/media/SessionStore;->**(**)**
+HSPLcom/phototidy/core/media/StagingTrash;->**(**)**
+HSPLcom/phototidy/core/model/MediaAlbum;->**(**)**
+HSPLcom/phototidy/core/model/MediaImage;->**(**)**
+HSPLcom/phototidy/core/model/MediaScope;->**(**)**
+HSPLcom/phototidy/core/model/MonthGroup;->**(**)**
+HSPLcom/phototidy/core/model/PendingMove;->**(**)**
+HSPLcom/phototidy/core/model/ReviewAction;->**(**)**
+HSPLcom/phototidy/core/model/ReviewRecord;->**(**)**
+HSPLcom/phototidy/core/settings/AppSettings;->**(**)**
+HSPLcom/phototidy/core/settings/SettingsStore;->**(**)**
+HSPLcom/phototidy/core/settings/ThemeMode;->**(**)**
+HSPLcom/phototidy/ui/ComposableSingletons;->**(**)**
+HSPLcom/phototidy/ui/LibraryUiState;->**(**)**
+HSPLcom/phototidy/ui/LibraryViewModel;->**(**)**
+HSPLcom/phototidy/ui/LibraryViewModelKt;->**(**)**
+HSPLcom/phototidy/ui/PhotoTidyRootKt;->**(**)**
+HSPLcom/phototidy/ui/RootTab;->**(**)**
+HSPLcom/phototidy/ui/albums/AlbumsScreenKt;->**(**)**
+HSPLcom/phototidy/ui/albums/ComposableSingletons;->**(**)**
+HSPLcom/phototidy/ui/components/CommonKt;->**(**)**
+HSPLcom/phototidy/ui/components/ComposableSingletons;->**(**)**
+HSPLcom/phototidy/ui/components/HelpSheetKt;->**(**)**
+HSPLcom/phototidy/ui/components/LabelsKt;->**(**)**
+HSPLcom/phototidy/ui/components/PermissionScreenKt;->**(**)**
+HSPLcom/phototidy/ui/home/ComposableSingletons;->**(**)**
+HSPLcom/phototidy/ui/home/HomeScreenKt;->**(**)**
+HSPLcom/phototidy/ui/review/AlbumQuickMoveBarKt;->**(**)**
+HSPLcom/phototidy/ui/review/ComposableSingletons;->**(**)**
+HSPLcom/phototidy/ui/review/ReviewScreenKt;->**(**)**
+HSPLcom/phototidy/ui/review/ReviewUiState;->**(**)**
+HSPLcom/phototidy/ui/review/ReviewViewModel;->**(**)**
+HSPLcom/phototidy/ui/review/ReviewViewModelKt;->**(**)**
+HSPLcom/phototidy/ui/review/ScopeGroup;->**(**)**
+HSPLcom/phototidy/ui/review/ScopeOption;->**(**)**
+HSPLcom/phototidy/ui/review/SwipeIntent;->**(**)**
+HSPLcom/phototidy/ui/review/SwipeablePhotoCardKt;->**(**)**
+HSPLcom/phototidy/ui/settings/ComposableSingletons;->**(**)**
+HSPLcom/phototidy/ui/settings/SettingsScreenKt;->**(**)**
+HSPLcom/phototidy/ui/theme/ColorKt;->**(**)**
+HSPLcom/phototidy/ui/theme/PhotoTidyMotion;->**(**)**
+HSPLcom/phototidy/ui/theme/PhotoTidyTheme;->**(**)**
+HSPLcom/phototidy/ui/theme/PhotoTidyThemeState;->**(**)**
+HSPLcom/phototidy/ui/theme/SemanticColors;->**(**)**
+HSPLcom/phototidy/ui/theme/ShapeKt;->**(**)**
+HSPLcom/phototidy/ui/theme/Spacing;->**(**)**
+HSPLcom/phototidy/ui/theme/ThemeKt;->**(**)**
+HSPLcom/phototidy/ui/theme/TypeKt;->**(**)**
+HSPLcom/phototidy/ui/trash/ComposableSingletons;->**(**)**
+HSPLcom/phototidy/ui/trash/TrashScreenKt;->**(**)**
+HSPLcom/phototidy/util/FormattersKt;->**(**)**
+

@@ -49,7 +49,6 @@ data class LibraryUiState(
     val trashLoadingMore: Boolean = false,
     val trashLoadError: Boolean = false,
     val showEmptyAlbums: Boolean = false,
-    val error: String? = null,
 ) {
     val albums: List<MediaAlbum> get() = overview?.albums.orEmpty()
 
@@ -110,10 +109,14 @@ class LibraryViewModel(
     fun refresh() {
         if (!_state.value.canRead) return
         viewModelScope.launch {
-            _state.update { it.copy(loading = true, error = null) }
+            _state.update { it.copy(loading = true) }
             val overview = runCatching { repo.loadOverview() }
-                .onFailure { e ->
-                    _state.update { it.copy(loading = false, error = e.message ?: "读取照片失败") }
+                .onFailure {
+                    // 必须说出来。以前这里只往一个没人读的字段里塞文案，
+                    // 结果扫描失败对用户完全静默 —— 看起来就像「照片全没了」。
+                    // 旧状态（overview）保持不变，所以失败不会把已有内容清空。
+                    _state.update { state -> state.copy(loading = false) }
+                    ops.emit(res.getString(R.string.library_load_failed))
                 }
                 .getOrNull() ?: return@launch
 
@@ -127,7 +130,6 @@ class LibraryViewModel(
                     overview = overview,
                     trash = firstPage,
                     trashCount = trashCount,
-                    error = null,
                 )
             }
             restoreSessionOnce()

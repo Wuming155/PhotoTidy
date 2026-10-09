@@ -9,6 +9,8 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
+import com.phototidy.R
+import com.phototidy.core.StringProvider
 import com.phototidy.core.model.MediaAlbum
 import com.phototidy.core.model.MediaImage
 import com.phototidy.core.model.MediaScope
@@ -76,8 +78,14 @@ sealed interface MediaOpResult {
  *     自家创建的媒体可以直接改；别人的媒体会抛 SecurityException，
  *     此时改用 `MediaStore.createXxxRequest()` 拉起系统授权框，用户同意后重试。
  *  4) 不做乐观更新。写失败必须回到 UI，让用户明确知道照片没被改动。
+ *
+ * 失败文案走 [StringProvider]：`core/` 里不留任何展示字面量，
+ * 文案一律落在 `strings.xml`。
  */
-class MediaStoreRepository(private val context: Context) : MediaRepository {
+class MediaStoreRepository(
+    private val context: Context,
+    private val strings: StringProvider,
+) : MediaRepository {
 
     private val resolver: ContentResolver = context.contentResolver
     private val collection: Uri = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
@@ -272,7 +280,7 @@ class MediaStoreRepository(private val context: Context) : MediaRepository {
                     ).intentSender,
                     kind = ConsentKind.Trash,
                 )
-            }.getOrElse { MediaOpResult.Failed(it.message ?: "无法创建回收站请求") }
+            }.getOrElse { MediaOpResult.Failed(it.message ?: strings.get(R.string.media_op_trash_request_failed)) }
         }
     }
 
@@ -309,7 +317,7 @@ class MediaStoreRepository(private val context: Context) : MediaRepository {
                     ).intentSender,
                     kind = ConsentKind.Delete,
                 )
-            }.getOrElse { MediaOpResult.Failed(it.message ?: "无法创建删除请求") }
+            }.getOrElse { MediaOpResult.Failed(it.message ?: strings.get(R.string.media_op_delete_request_failed)) }
         }
     }
 
@@ -441,9 +449,9 @@ class MediaStoreRepository(private val context: Context) : MediaRepository {
         request: (List<Uri>) -> IntentSender,
     ): MediaOpResult = when {
         denied.isEmpty() && firstError == null -> MediaOpResult.Success
-        denied.isEmpty() -> MediaOpResult.Failed(firstError ?: "操作失败")
+        denied.isEmpty() -> MediaOpResult.Failed(firstError ?: strings.get(R.string.media_op_failed))
         else -> runCatching { MediaOpResult.NeedsConsent(request(denied), kind) }
-            .getOrElse { MediaOpResult.Failed(it.message ?: "无法创建授权请求") }
+            .getOrElse { MediaOpResult.Failed(it.message ?: strings.get(R.string.media_op_consent_request_failed)) }
     }
 
     /**

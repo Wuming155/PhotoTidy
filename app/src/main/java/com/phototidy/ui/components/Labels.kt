@@ -26,7 +26,7 @@ fun selectedLabel(count: Int): String =
  *
  * 刻意放在 UI 层：`MediaScope` 是数据层的概念，它的 `key` 要稳定、可序列化，
  * 不能拿来当展示文案。两个变体对应两处不同的语境 ——
- * 顶栏空间紧张要短名，下拉菜单里要写清楚「这是全部照片」。
+ * 顶栏空间紧张要短名，范围选择器里要写清楚「这是全部照片」。
  */
 @Composable
 fun MediaScope.shortLabel(): String = when (this) {

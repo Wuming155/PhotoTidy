@@ -2,6 +2,8 @@ package com.phototidy.core.media
 
 import android.content.IntentSender
 import androidx.activity.result.IntentSenderRequest
+import com.phototidy.R
+import com.phototidy.core.StringProvider
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -29,8 +31,11 @@ import kotlin.coroutines.resume
  *
  * 2. **没有订阅者时绝不悬挂**。UI 还没订阅 [consent] 流时直接判定「未授权」返回，
  *    而不是让协程永远等下去。
+ *
+ * 失败文案走 [StringProvider]（`core/` 里不留任何字面量），
+ * 这样这个类仍然可以在 JVM 单测里用假实现跑起来。
  */
-class MediaOpCoordinator {
+class MediaOpCoordinator(private val strings: StringProvider) {
 
     private val _consent = MutableSharedFlow<IntentSenderRequest>(extraBufferCapacity = 1)
     val consent: SharedFlow<IntentSenderRequest> = _consent.asSharedFlow()
@@ -89,12 +94,15 @@ class MediaOpCoordinator {
             is MediaOpResult.Failed -> report(onFailure, result.message)
 
             is MediaOpResult.NeedsConsent -> when {
-                attempt >= budget -> report(onFailure, "系统未放行这次修改，已跳过")
+                attempt >= budget -> report(
+                    onFailure,
+                    strings.get(R.string.media_op_budget_exhausted),
+                )
 
                 awaitConsent(result.intentSender) ->
                     execute(successMessage, onSuccess, onFailure, attempt + 1, budget, op)
 
-                else -> report(onFailure, "未获得授权，照片没有被改动")
+                else -> report(onFailure, strings.get(R.string.media_op_consent_denied))
             }
         }
     }

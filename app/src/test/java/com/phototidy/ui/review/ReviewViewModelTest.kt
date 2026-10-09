@@ -80,10 +80,10 @@ class ReviewViewModelTest {
         loaderImages: List<MediaImage> = (1L..20L).map { makeImage(it) },
     ): ReviewViewModel {
         val staging = StagingTrash()
-        val ops = MediaOpCoordinator()
         val strings = object : StringProvider {
             override fun get(resId: Int, vararg args: Any) = "msg"
         }
+        val ops = MediaOpCoordinator(strings)
         return ReviewViewModel(
             repo = repo, staging = staging, ops = ops, session = session, strings = strings,
             scope = scope, totalCount = totalCount, initialMoveTargets = emptyList(),
@@ -167,6 +167,24 @@ class ReviewViewModelTest {
         assertEquals(0, session.loadPendingMoves(MediaScope.Recent.key).size)
         assertEquals(0, session.loadStaging().size)
         assertTrue(vm.state.value.committed)
+    }
+
+    @Test
+    fun `clearing the whole queue keeps undo available`() {
+        // 「全部清掉、还没提交」是最需要反悔的一刻：队列滑空只意味着没有下一张了，
+        // 不代表撤销跟着失效 —— 改动全在内存里，撤销就是纯内存回滚。
+        val vm = makeVm(totalCount = 3, loaderImages = (1L..3L).map { makeImage(it) })
+        repeat(3) { vm.trash() }
+
+        assertTrue(vm.state.value.finished)
+        assertTrue(vm.state.value.canUndo)
+        assertEquals(3, vm.state.value.stagedCount)
+
+        vm.undo()
+
+        assertFalse(vm.state.value.finished)
+        assertEquals(2, vm.state.value.stagedCount)
+        assertEquals(3L, vm.state.value.current?.id)
     }
 
     @Test

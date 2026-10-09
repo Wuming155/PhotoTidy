@@ -29,7 +29,10 @@ object Graph {
     /** ViewModel 里拼提示语要用 —— 它们没有 Context，但需要拿到本地化后的文案。 */
     val resources: Resources get() = appContext.resources
 
-    val repository: MediaStoreRepository by lazy { MediaStoreRepository(appContext) }
+    /** 本地化文案的唯一出口；`core/` 里的类也通过它拿文案。 */
+    val stringProvider: StringProvider by lazy { ResourcesStringProvider(appContext.resources) }
+
+    val repository: MediaStoreRepository by lazy { MediaStoreRepository(appContext, stringProvider) }
 
     val settings: SettingsStore by lazy { SettingsStore(appContext) }
 
@@ -37,10 +40,7 @@ object Graph {
 
     val sessionStore: SessionStore by lazy { RealSessionStore(appContext) }
 
-    /** ViewModel 里拼提示语要用 —— 它们没有 Context，但需要拿到本地化后的文案。 */
-    val stringProvider: StringProvider by lazy { ResourcesStringProvider(appContext.resources) }
-
-    val mediaOps: MediaOpCoordinator by lazy { MediaOpCoordinator() }
+    val mediaOps: MediaOpCoordinator by lazy { MediaOpCoordinator(stringProvider) }
 
     fun install(context: Context) {
         appContext = context.applicationContext

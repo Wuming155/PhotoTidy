@@ -44,6 +44,9 @@
     <!-- ============================================================ 整理范围 -->
     <string name="scope_recent">最近</string>
     <string name="scope_recent_all">最近（全部）</string>
+    <string name="scope_pick_title">选择整理范围</string>
+    <string name="scope_section_albums">相册</string>
+    <string name="scope_section_months">按月份</string>
 
     <!-- ============================================================ 首页 -->
     <string name="home_subtitle_empty">还没有可整理的照片</string>
@@ -163,6 +166,17 @@
     <string name="commit_done_moves">已完成 · 移动 %1$d 张</string>
     <string name="commit_done_trash">已完成 · 回收 %1$d 张</string>
     <string name="commit_done_both">已完成 · 移动 %1$d 张，回收 %2$d 张</string>
+
+    <!-- 扫描失败也必须说出来：静默失败会让用户以为「照片没了」或者「应用坏了」 -->
+    <string name="library_load_failed">读取照片失败，请点重新扫描再试一次</string>
+
+    <!-- 媒体写操作的失败原因（由 MediaOpCoordinator / MediaStoreRepository 产出） -->
+    <string name="media_op_budget_exhausted">系统未放行这次修改，已跳过</string>
+    <string name="media_op_consent_denied">未获得授权，照片没有被改动</string>
+    <string name="media_op_trash_request_failed">无法创建回收站请求</string>
+    <string name="media_op_delete_request_failed">无法创建删除请求</string>
+    <string name="media_op_consent_request_failed">无法创建授权请求</string>
+    <string name="media_op_failed">操作失败</string>
 
     <!-- ============================================================ 手势卡片 -->
     <string name="cd_current_photo">待整理的照片</string>

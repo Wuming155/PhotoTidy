@@ -253,6 +253,8 @@ private fun HeroCard(
                     image = cover,
                     contentDescription = stringResource(R.string.cd_recent_photo),
                     contentScale = ContentScale.Crop,
+                    // 首页封面是整屏最大的一张图，首帧加载出来时值得一次淡入
+                    crossfade = true,
                     modifier = Modifier.fillMaxSize(),
                 )
                 // 底部渐变：保证白色文字在任何照片上都可读

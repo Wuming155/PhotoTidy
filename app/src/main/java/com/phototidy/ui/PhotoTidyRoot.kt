@@ -65,11 +65,11 @@ import com.phototidy.core.settings.SettingsStore
 import com.phototidy.ui.albums.AlbumsScreen
 import com.phototidy.ui.components.HelpSheet
 import com.phototidy.ui.components.PermissionScreen
-import com.phototidy.ui.components.optionLabel
 import com.phototidy.ui.components.shortLabel
 import com.phototidy.ui.home.HomeScreen
 import com.phototidy.ui.review.ReviewScreen
 import com.phototidy.ui.review.ReviewViewModel
+import com.phototidy.ui.review.ScopeGroup
 import com.phototidy.ui.review.ScopeOption
 import com.phototidy.ui.settings.SettingsScreen
 import com.phototidy.ui.trash.TrashScreen
@@ -225,10 +225,9 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                     )
                     val reviewState by reviewVm.state.collectAsStateWithLifecycle()
 
-                    // 标签用到 stringResource，必须在 composable 上下文里先算好
-                    //（remember 的 lambda 不是 composable，里面不能调 @Composable）
-                    val recentScopeLabel = reviewScope.optionLabel()
-                    val monthScopeLabels = libraryState.months.map { monthTitle(it.year, it.month) }
+                    // 选择器里的标签不在这里预拼：月份标题要过 stringResource，
+                    // 而这里是「每滑一张都会重组」的地方 —— 一百多个月份全部格式化一遍太贵。
+                    // 标签改由 ScopePickerRow 在渲染到那一行时现算（见 MediaScope.optionLabel）。
                     val scopeOptions = remember(
                         reviewScope.key,
                         libraryState.albums,
@@ -236,27 +235,47 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                         libraryState.totalCount,
                     ) {
                         buildList {
-                            add(ScopeOption(recentScopeLabel, MediaScope.Recent, libraryState.totalCount))
+                            add(
+                                ScopeOption(
+                                    scope = MediaScope.Recent,
+                                    count = libraryState.totalCount,
+                                    group = ScopeGroup.Recent,
+                                ),
+                            )
                             libraryState.albums.forEach { album ->
                                 add(
                                     ScopeOption(
-                                        album.name,
-                                        MediaScope.Album(album.bucketId, album.name),
-                                        album.count,
+                                        scope = MediaScope.Album(album.bucketId, album.name),
+                                        count = album.count,
+                                        group = ScopeGroup.Album,
                                     ),
                                 )
                             }
-                            libraryState.months.forEachIndexed { index, month ->
+                            libraryState.months.forEach { month ->
                                 add(
                                     ScopeOption(
-                                        monthScopeLabels[index],
-                                        MediaScope.Month(month.year, month.month),
-                                        month.count,
+                                        scope = MediaScope.Month(month.year, month.month),
+                                        count = month.count,
+                                        group = ScopeGroup.Month,
                                     ),
                                 )
                             }
                         }
                     }
+
+                    // 记忆化回调：`reviewVm::keep` 这类绑定方法引用每次重组都会新建实例，
+                    // 参数实例不等 ⇒ Compose 无法跳过子组件 —— 而这里每次滑动都会重组，
+                    // 于是每滑一张整棵整理子树（含带 LazyRow 的快捷移动条）都要重跑。
+                    val onKeep = remember(reviewVm) { reviewVm::keep }
+                    val onTrash = remember(reviewVm) { reviewVm::trash }
+                    val onUndo = remember(reviewVm) { reviewVm::undo }
+                    val onCommit = remember(reviewVm) { reviewVm::commit }
+                    val onMove = remember(reviewVm) { reviewVm::moveTo }
+                    val onRestart = remember(reviewVm) { reviewVm::restart }
+                    val onDefer = remember(reviewVm) { reviewVm::deferCurrent }
+                    val onCloseReview = remember { { scopeEncoded = "" } }
+                    val onOpenHelp = remember { { helpVisible = true } }
+                    val onPickScope = remember { { scope: MediaScope -> openScope(scope) } }
 
                     ReviewScreen(
                         state = reviewState,
@@ -265,16 +284,16 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                         sensitivity = settings.swipeSensitivity,
                         hapticsEnabled = settings.hapticsEnabled,
                         showNextPreview = settings.showNextPreview,
-                        onClose = { scopeEncoded = "" },
-                        onKeep = reviewVm::keep,
-                        onTrash = reviewVm::trash,
-                        onUndo = reviewVm::undo,
-                        onCommit = reviewVm::commit,
-                        onMove = reviewVm::moveTo,
-                        onOpenHelp = { helpVisible = true },
-                        onPickScope = { scope -> openScope(scope) },
-                        onRestart = reviewVm::restart,
-                        onDefer = reviewVm::deferCurrent,
+                        onClose = onCloseReview,
+                        onKeep = onKeep,
+                        onTrash = onTrash,
+                        onUndo = onUndo,
+                        onCommit = onCommit,
+                        onMove = onMove,
+                        onOpenHelp = onOpenHelp,
+                        onPickScope = onPickScope,
+                        onRestart = onRestart,
+                        onDefer = onDefer,
                         modifier = Modifier.fillMaxSize(),
                     )
 
@@ -413,11 +432,6 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
         HelpSheet(onDismiss = { helpVisible = false })
     }
 }
-
-/** 月份标题的本地化拼法，下拉菜单里也用得着。 */
-@Composable
-private fun monthTitle(year: Int, month: Int): String =
-    stringResource(R.string.month_title, year, month)
 
 @Composable
 private fun AppNavigationBar(
