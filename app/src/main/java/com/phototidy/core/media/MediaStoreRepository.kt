@@ -284,19 +284,39 @@ class MediaStoreRepository(
         }
     }
 
-    /** 从系统回收站还原。 */
-    suspend fun restoreFromSystemTrash(images: List<MediaImage>): MediaOpResult =
-        withContext(Dispatchers.IO) {
-            val uris = images.map { uriFor(it.id) }
-            if (uris.isEmpty()) return@withContext MediaOpResult.Success
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.IS_TRASHED, 0)
-            }
-            directUpdate(uris, values).toResult(
-                kind = ConsentKind.Write,
-                request = { denied -> MediaStore.createWriteRequest(resolver, denied).intentSender },
-            )
+    /**
+     * 从系统回收站还原。
+     *
+     * ⚠️ 与 [moveToSystemTrash] 严格对称 —— **不能**走「先直写、被拒再要写授权」那条路。
+     *
+     * `IS_TRASHED` 不是普通可写列：`update()` 改它会**静默返回 0 行**且不抛 SecurityException
+     * （见 [updateAll] 的实机结论），写权限（`createWriteRequest`）也不解锁这一列。
+     * 唯一能翻它的 API 是 `MediaStore.createTrashRequest`，其 `value` 参数就是
+     * 「要写入的 IS_TRASHED 值」—— 进回收站传 true，还原传 false。
+     *
+     * 这里曾经直写 `IS_TRASHED = 0`、被拒后弹 `createWriteRequest` 再重放，于是：
+     * 直写 0 行 → 判为「被拒」→ 弹写权限框 → 用户点允许 → 重放仍然 0 行 →
+     * 授权次数用尽 → 报「系统未放行」。回收站里的照片因此永远出不来。
+     *
+     * [attempt] > 0 表示用户已经同意过 —— 同 [moveToSystemTrash]：授权即执行，
+     * 系统已经改完了，再 update 一次反而会静默 0 行被误判成失败。
+     */
+    suspend fun restoreFromSystemTrash(imageIds: List<Long>, attempt: Int): MediaOpResult {
+        if (imageIds.isEmpty()) return MediaOpResult.Success
+        if (attempt > 0) return MediaOpResult.Success
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                MediaOpResult.NeedsConsent(
+                    intentSender = MediaStore.createTrashRequest(
+                        resolver,
+                        imageIds.map(::uriFor),
+                        false,
+                    ).intentSender,
+                    kind = ConsentKind.Trash,
+                )
+            }.getOrElse { MediaOpResult.Failed(it.message ?: strings.get(R.string.media_op_trash_request_failed)) }
         }
+    }
 
     /**
      * 彻底删除。
@@ -477,9 +497,6 @@ class MediaStoreRepository(
         }
         return UpdateOutcome(denied, firstError)
     }
-
-    private fun directUpdate(uris: List<Uri>, values: ContentValues): UpdateOutcome =
-        updateAll(uris.map { it to values })
 
     private companion object {
         const val VISIBLE =

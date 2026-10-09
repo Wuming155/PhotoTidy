@@ -230,13 +230,21 @@ class LibraryViewModel(
 
     // ------------------------------------------------------ 系统回收站
 
+    /**
+     * 系统回收站还原。
+     *
+     * 走 [MediaOpCoordinator.runStaged] 而非 [MediaOpCoordinator.run]：还原和进回收站一样，
+     * 是「授权即执行」的一次性请求（`createTrashRequest(..., false)`），
+     * 授权回来后必须让仓库知道「这是第 1 次尝试」而直接判成功 —— 见 [MediaStoreRepository.restoreFromSystemTrash]。
+     */
     fun restoreFromSystemTrash(images: List<MediaImage>) {
         if (images.isEmpty()) return
         viewModelScope.launch {
-            ops.run(
+            ops.runStaged(
                 successMessage = res.getString(R.string.trash_restored, images.size),
                 onSuccess = { refresh() },
-            ) { repo.restoreFromSystemTrash(images) }
+                consentBudget = 1,
+            ) { attempt -> repo.restoreFromSystemTrash(images.map { it.id }, attempt) }
         }
     }
 
