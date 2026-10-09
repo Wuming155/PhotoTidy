@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Lint 基线配置。
+
+  这里只关掉「确认为误报」的检查项，其余保持默认 —— 关得越少，将来真出问题时越容易被发现。
+-->
+<lint>
+
+    <!--
+      ObsoleteSdkInt：minSdk 为 31，lint 因此认为 -v26 这类限定符是多余的。
+      但 adaptive icon（<adaptive-icon> 元素）按资源系统规范必须放在 mipmap-anydpi-v26 里，
+      v26 限定符承担的是「这个 XML 只给 API 26+ 解析」的语义，不是版本冗余。
+      把它挪到 mipmap-anydpi 会直接导致 aapt2 报 resource mipmap/ic_launcher not found（已实测）。
+      所以这里只对图标目录关掉该检查，代码里的 SDK_INT 判断仍然照常检查。
+    -->
+    <issue id="ObsoleteSdkInt">
+        <ignore path="src/main/res/mipmap-anydpi-v26" />
+    </issue>
+
+    <!--
+      依赖有新版本可用：本工程的版本组合是刻意选定的稳定组合，
+      由 lint 提示「有新版」属于噪音，升级节奏由 libs.versions.toml 统一控制。
+    -->
+    <issue id="GradleDependency" severity="informational" />
+    <issue id="NewerVersionAvailable" severity="informational" />
+
+</lint>

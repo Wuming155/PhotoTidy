@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PhotoTidy · Material 3 设计预览</title>
+<style>
+  /* ============================================================
+     配色令牌：与 ui/theme/Color.kt 一一对应
+     ============================================================ */
+  :root{
+    --font: -apple-system, "Roboto Flex", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+    --r-xs:8px; --r-sm:14px; --r-md:20px; --r-lg:24px; --r-xl:32px; --r-card:28px;
+    --keep:#12B76A; --trash:#E5484D; --fav:#E5247B; --undo:#6B7A76;
+  }
+  html[data-theme="light"]{
+    --bg:#F4FBF8; --on-bg:#161D1B;
+    --primary:#006B5C; --on-primary:#fff;
+    --primary-container:#79F7E0; --on-primary-container:#00201A;
+    --secondary-container:#CDE8DF; --on-secondary-container:#072019;
+    --tertiary:#42618A; --tertiary-container:#D3E4FF; --on-tertiary-container:#001C38;
+    --surface:#F4FBF8; --on-surface:#161D1B;
+    --sv:#DAE5E1; --on-sv:#3F4946;
+    --outline:#6F7976; --outline-v:#BEC9C5;
+    --c-lowest:#ffffff; --c-low:#EEF6F3; --c:#E8F0ED; --c-high:#E3EAE7; --c-highest:#DDE5E1;
+    --shadow:0 8px 28px rgba(16,29,26,.14);
+  }
+  html[data-theme="dark"]{
+    --bg:#0E1513; --on-bg:#DDE4E1;
+    --primary:#5AD8BC; --on-primary:#003730;
+    --primary-container:#005045; --on-primary-container:#79F7E0;
+    --secondary-container:#344C45; --on-secondary-container:#CDE8DF;
+    --tertiary:#A9C9FF; --tertiary-container:#29466E; --on-tertiary-container:#D3E4FF;
+    --surface:#0E1513; --on-surface:#DDE4E1;
+    --sv:#3F4946; --on-sv:#BEC9C5;
+    --outline:#889390; --outline-v:#3F4946;
+    --c-lowest:#090F0E; --c-low:#161D1B; --c:#1A211F; --c-high:#242B29; --c-highest:#2F3634;
+    --shadow:0 10px 34px rgba(0,0,0,.55);
+  }
+  html[data-theme="dark"]{ --keep:#4BE08F; --trash:#FF6B6F; --fav:#FF7BB0; --undo:#9FB0AB; }
+
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    font-family:var(--font); background:#0b0f0e; color:#e6ecea;
+    padding:48px 24px 72px; -webkit-font-smoothing:antialiased;
+  }
+  html[data-theme="light"] body{ background:#e9efec; color:#16211e; }
+
+  /* ---------- 页头 ---------- */
+  header{max-width:1500px;margin:0 auto 40px}
+  .brand{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+  .logo{width:46px;height:46px;border-radius:14px;background:var(--primary);position:relative;flex-shrink:0}
+  .logo::before,.logo::after{content:"";position:absolute;background:var(--on-primary);border-radius:2px}
+  .logo::before{left:11px;top:12px;width:24px;height:20px}
+  .logo::after{left:14px;top:26px;width:18px;height:12px;background:var(--primary);
+    border-left:5px solid var(--primary);border-right:5px solid var(--primary);
+    clip-path:polygon(0 100%,34% 0,58% 55%,74% 20%,100% 100%)}
+  h1{font-size:32px;font-weight:800;letter-spacing:-.5px;line-height:1.1}
+  .sub{font-size:14px;opacity:.62;margin-top:3px}
+  .meta-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .tag{font-size:12px;padding:5px 11px;border-radius:99px;
+    background:var(--c-high);color:var(--on-surface);border:1px solid var(--outline-v)}
+  .tag b{color:var(--primary);font-weight:700}
+
+  .controls{display:flex;gap:10px;margin-top:22px;flex-wrap:wrap}
+  button.tg{font-family:inherit;font-size:13px;font-weight:600;padding:9px 16px;border-radius:99px;
+    border:1px solid var(--outline-v);background:var(--c-high);color:var(--on-surface);cursor:pointer;
+    transition:transform .18s cubic-bezier(.2,0,0,1),background .18s}
+  button.tg:hover{background:var(--c-highest)}
+  button.tg:active{transform:scale(.95)}
+
+  /* ---------- 手机框 ---------- */
+  .rail{max-width:1500px;margin:0 auto;display:flex;gap:34px;flex-wrap:wrap;justify-content:center;
+    align-items:flex-start}
+  .slot{display:flex;flex-direction:column;align-items:center;gap:14px}
+  .slot h2{font-size:14px;font-weight:700;letter-spacing:.3px}
+  .slot .note{font-size:11.5px;opacity:.55;max-width:340px;text-align:center;line-height:1.6}
+  .phone{width:340px;background:#000;border-radius:44px;padding:9px;box-shadow:var(--shadow);
+    border:1px solid rgba(255,255,255,.09);flex-shrink:0}
+  html[data-theme="light"] .phone{background:#151a18}
+  .screen{background:var(--bg);color:var(--on-bg);border-radius:36px;overflow:hidden;
+    height:718px;display:flex;flex-direction:column;position:relative;font-size:13px}
+
+  .sb{height:30px;display:flex;justify-content:space-between;align-items:flex-end;
+    padding:0 20px 2px;font-size:11px;font-weight:600;opacity:.9;flex-shrink:0}
+  .sb .r{display:flex;gap:5px;align-items:center;font-weight:500;opacity:.85}
+  .batt{background:var(--primary);color:var(--on-primary);border-radius:4px;padding:0 5px;font-weight:700;font-size:10px}
+
+  .body{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+
+  /* ---------- 通用件 ---------- */
+  .pad{padding:0 20px}
+  .h-lg{font-size:30px;font-weight:800;letter-spacing:-.6px;line-height:1.1}
+  .h-md{font-size:23px;font-weight:700;letter-spacing:-.3px}
+  .cap{font-size:12px;opacity:.6;line-height:1.5}
+  .sec{font-size:17px;font-weight:700;letter-spacing:-.2px}
+  .gap4{height:4px}.gap6{height:6px}.gap8{height:8px}.gap10{height:10px}
+  .gap12{height:12px}.gap16{height:16px}.gap24{height:24px}
+
+  .badge{display:inline-flex;align-items:center;font-size:10.5px;font-weight:600;
+    padding:3px 9px;border-radius:8px;background:var(--secondary-container);color:var(--on-secondary-container)}
+  .badge.warn{background:#E5484D22;color:var(--trash)}
+  .badge.ghost{background:rgba(255,255,255,.22);color:#fff}
+
+  /* ---------- 首页 ---------- */
+  .hero-wrap{position:relative;height:262px}
+  .hero-b,.hero-b2{position:absolute;left:50%;transform:translateX(-50%);height:246px;
+    border-radius:var(--r-card)}
+  .hero-b{width:80%;top:16px;background:var(--c-high)}
+  .hero-b2{width:90%;top:8px;background:var(--c)}
+  .hero{position:absolute;inset:0 0 auto 0;height:246px;border-radius:var(--r-card);overflow:hidden;
+    box-shadow:var(--shadow);background:var(--c-lowest)}
+  .hero img{width:100%;height:100%;object-fit:cover;display:block}
+  .hero .scrim{position:absolute;inset:0;background:linear-gradient(180deg,
+    transparent 42%, rgba(0,0,0,.76) 100%)}
+  .hero .txt{position:absolute;left:20px;bottom:18px;color:#fff}
+  .hero .txt .n{font-size:26px;font-weight:800;letter-spacing:-.5px;margin:8px 0 2px}
+  .hero .txt .d{font-size:11.5px;opacity:.85}
+
+  .months{display:flex;gap:10px;padding:0 20px;overflow:hidden}
+  .month{width:118px;flex-shrink:0;border-radius:var(--r-lg);background:var(--c-low);overflow:hidden}
+  .month .ph{height:106px;background:var(--sv)}
+  .month .ph img{width:100%;height:100%;object-fit:cover;display:block}
+  .month .lb{padding:7px 10px 9px}
+  .month .lb b{font-size:13px;font-weight:600;display:block}
+  .month .lb span{font-size:11px;opacity:.6}
+
+  .frow{display:flex;align-items:center;gap:14px;margin:0 20px 10px;padding:10px;
+    border-radius:var(--r-lg);background:var(--c-low)}
+  .frow .th{width:52px;height:52px;border-radius:var(--r-sm);overflow:hidden;background:var(--sv);flex-shrink:0}
+  .frow .th img{width:100%;height:100%;object-fit:cover;display:block}
+  .frow .nm{flex:1;min-width:0}
+  .frow .nm b{font-size:14.5px;font-weight:600;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .frow .nm span{font-size:11.5px;opacity:.6}
+  .frow .done{font-size:11.5px;color:var(--keep);font-weight:600}
+
+  /* ---------- 底部导航 ---------- */
+  .nav{display:flex;background:var(--c);flex-shrink:0;padding:8px 4px 4px;
+    border-top:1px solid var(--outline-v)}
+  .nav .it{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;
+    font-size:11px;opacity:.55;padding:4px 0}
+  .nav .it.on{opacity:1;color:var(--primary)}
+  .nav .it .ic{width:23px;height:23px;position:relative}
+  .nav .it .ic svg{width:100%;height:100%;stroke:currentColor;fill:none;stroke-width:1.8;
+    stroke-linecap:round;stroke-linejoin:round}
+  .nav .pill{position:absolute;inset:-4px -13px;border-radius:99px;background:var(--primary-container);z-index:-1}
+  .nav .it.on .ic{z-index:0}
+  .nav .dot{position:absolute;top:-3px;right:-6px;background:var(--trash);color:#fff;font-size:9px;
+    min-width:15px;height:15px;border-radius:99px;display:flex;align-items:center;justify-content:center;
+    font-weight:700;padding:0 4px}
+  .home-bar{height:16px;display:flex;align-items:center;justify-content:center;background:var(--c);flex-shrink:0}
+  .home-bar i{width:104px;height:4px;border-radius:99px;background:var(--outline);opacity:.5}
+
+  .fab{position:absolute;right:18px;bottom:84px;height:52px;padding:0 20px;border-radius:99px;
+    background:var(--primary-container);color:var(--on-primary-container);font-size:14px;font-weight:700;
+    display:flex;align-items:center;gap:9px;box-shadow:var(--shadow);z-index:5}
+  .fab svg{width:19px;height:19px;fill:currentColor}
+
+  /* ---------- 整理页 ---------- */
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:4px 8px 0;flex-shrink:0}
+  .tb{width:42px;height:42px;display:flex;align-items:center;justify-content:center;
+    color:var(--on-surface);position:relative}
+  .tb svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .tb .bdot{position:absolute;top:4px;right:2px;background:var(--trash);color:#fff;font-size:9.5px;
+    min-width:16px;height:16px;border-radius:99px;display:flex;align-items:center;justify-content:center;
+    font-weight:700;padding:0 4px}
+  .pill-btn{background:var(--secondary-container);color:var(--on-secondary-container);
+    border-radius:99px;padding:9px 18px;font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:7px}
+  .pill-btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;
+    stroke-linecap:round;stroke-linejoin:round}
+
+  .prog{margin:6px 20px 0;flex-shrink:0}
+  .pbar{height:4px;border-radius:99px;background:var(--c-highest);overflow:hidden}
+  .pbar i{display:block;height:100%;width:34%;background:var(--primary);border-radius:99px}
+  .prow{display:flex;justify-content:space-between;font-size:11px;opacity:.6;margin-top:6px}
+
+  .card-area{flex:1;min-height:0;padding:6px 16px;position:relative}
+  .card{position:absolute;inset:6px 16px;border-radius:var(--r-card);overflow:hidden;
+    background:var(--c-lowest);box-shadow:var(--shadow)}
+  .card img{width:100%;height:100%;object-fit:cover;display:block}
+  .card .rim{position:absolute;inset:0;border-radius:var(--r-card);border:3px solid transparent}
+  .card.armed .rim{border-color:var(--keep);box-shadow:inset 0 0 42px rgba(18,183,106,.28)}
+  .stamp{position:absolute;font-size:12.5px;font-weight:800;letter-spacing:.5px;color:#fff;
+    padding:7px 14px;border-radius:var(--r-sm);box-shadow:0 4px 14px rgba(0,0,0,.28);
+    transform:rotate(-11deg)}
+  .stamp.k{left:18px;top:18px;background:var(--keep)}
+  .stamp.t{left:50%;top:18px;transform:translateX(-50%);background:var(--trash);font-weight:700}
+
+  .hintline{text-align:center;font-size:10.5px;opacity:.58;padding:2px 0 6px;flex-shrink:0}
+
+  .acts{display:flex;justify-content:space-evenly;align-items:center;padding:0 14px;flex-shrink:0}
+  .act{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:10.5px;opacity:.85;min-width:58px}
+  .act .ring{width:48px;height:48px;border-radius:99px;background:var(--c-high);
+    display:flex;align-items:center;justify-content:center}
+  .act.primary .ring{width:58px;height:58px}
+  .act.primary .ring svg{width:26px;height:26px}
+  .act .ring svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;
+    stroke-linecap:round;stroke-linejoin:round}
+  .act .ring.f svg{fill:currentColor;stroke:none}
+  .k{color:var(--keep)} .t{color:var(--trash)} .f{color:var(--fav)} .u{color:var(--undo)}
+  .act.primary .ring{background:color-mix(in srgb, var(--keep) 18%, transparent)}
+
+  .movebar{margin-top:8px;background:var(--c);border-radius:var(--r-xl) var(--r-xl) 0 0;
+    padding:11px 0 8px;flex-shrink:0}
+  .movebar .hd{display:flex;align-items:center;gap:6px;padding:0 18px 8px;font-size:11px;opacity:.62}
+  .movebar .hd svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
+  .mrow{display:flex;gap:4px;padding:0 14px;overflow:hidden}
+  .mt{width:70px;flex-shrink:0;border-radius:var(--r-md);background:var(--c-high);
+    padding:9px 4px;display:flex;flex-direction:column;align-items:center;gap:5px}
+  .mt svg{width:21px;height:21px;stroke:var(--primary);fill:none;stroke-width:1.9;
+    stroke-linecap:round;stroke-linejoin:round}
+  .mt span{font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .mt i{font-size:9.5px;opacity:.55;font-style:normal}
+
+  /* ---------- 相册页 ---------- */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 20px}
+  .tile{border-radius:var(--r-card);overflow:hidden;background:var(--c-low)}
+  .tile .ph{aspect-ratio:1;position:relative;background:var(--sv)}
+  .tile .ph img{width:100%;height:100%;object-fit:cover;display:block}
+  .tile .ph .s{position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%,rgba(0,0,0,.62))}
+  .tile .ph .c{position:absolute;right:10px;bottom:10px;color:#fff;font-size:11px;font-weight:600}
+  .tile .lb{padding:10px 12px 12px;background:var(--c-low)}
+  .tile .lb b{font-size:14px;font-weight:600;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tile .lb span{font-size:10.5px;opacity:.55;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .banner{margin:0 20px;border-radius:var(--r-lg);background:var(--tertiary-container);
+    color:var(--on-tertiary-container);padding:13px;display:flex;gap:11px;align-items:center}
+  .banner svg{width:20px;height:20px;flex-shrink:0;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
+  .banner .tx{flex:1;min-width:0}
+  .banner .tx b{font-size:13px;display:block}
+  .banner .tx span{font-size:11px;opacity:.8}
+  .banner .go{font-size:12px;font-weight:700;background:var(--tertiary);color:#fff;
+    padding:7px 13px;border-radius:99px;flex-shrink:0}
+
+  /* ---------- 回收站 ---------- */
+  .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:0 20px}
+  .gt{aspect-ratio:1;border-radius:var(--r-sm);overflow:hidden;background:var(--sv);position:relative}
+  .gt img{width:100%;height:100%;object-fit:cover;display:block}
+  .gt .ck{position:absolute;right:6px;top:6px;width:21px;height:21px;border-radius:99px;
+    background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.35)}
+  .gt.sel .ck{background:var(--primary);border-color:var(--primary)}
+  .gt.sel::after{content:"";position:absolute;inset:0;background:rgba(0,0,0,.42)}
+  .gt.sel .ck::after{content:"✓";position:absolute;inset:0;display:flex;align-items:center;
+    justify-content:center;color:var(--on-primary);font-size:12px;font-weight:800}
+  .sel-note{font-size:11px;opacity:.6;padding:12px 20px 8px}
+  .barrow{display:flex;gap:10px;padding:0 20px}
+  .btn{flex:1;height:44px;border-radius:99px;display:flex;align-items:center;justify-content:center;
+    gap:7px;font-size:13px;font-weight:700;border:1px solid var(--outline-v);color:var(--on-surface);
+    background:transparent}
+  .btn svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+  .btn.danger{background:var(--trash);color:#fff;border-color:transparent}
+  /* ---------- 设置 ---------- */
+  .scard{margin:0 20px 8px;border-radius:var(--r-lg);background:var(--c-low);padding:15px}
+  .srow{display:flex;align-items:center;gap:13px}
+  .srow .ci{width:21px;height:21px;flex-shrink:0;color:var(--primary)}
+  .srow .ci svg{width:100%;height:100%;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  .srow .tx{flex:1;min-width:0}
+  .srow .tx b{font-size:13.5px;font-weight:600;display:block}
+  .srow .tx span{font-size:11px;opacity:.58;display:block;line-height:1.45}
+  .sw{width:44px;height:25px;border-radius:99px;background:var(--primary);position:relative;flex-shrink:0}
+  .sw::after{content:"";position:absolute;right:2.5px;top:2.5px;width:20px;height:20px;
+    border-radius:99px;background:var(--on-primary)}
+  .sw.off{background:var(--sv)}
+  .sw.off::after{right:auto;left:2.5px;background:var(--on-sv)}
+  .seg{display:flex;border:1px solid var(--outline);border-radius:99px;overflow:hidden;margin-top:12px}
+  .seg div{flex:1;text-align:center;font-size:12.5px;font-weight:600;padding:8px 0;color:var(--on-surface)}
+  .seg div.on{background:var(--secondary-container);color:var(--on-secondary-container)}
+  .slider{height:4px;border-radius:99px;background:var(--c-highest);margin:20px 6px 12px;position:relative}
+  .slider i{position:absolute;left:0;top:0;height:100%;width:45%;background:var(--primary);border-radius:99px}
+  .slider b{position:absolute;left:45%;top:50%;transform:translate(-50%,-50%);width:18px;height:18px;
+    border-radius:99px;background:var(--primary);box-shadow:0 0 0 5px color-mix(in srgb,var(--primary) 18%,transparent)}
+  .pl{display:flex;align-items:center;gap:10px;font-size:11.5px;opacity:.66;padding:3px 0}
+  .pl svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+
+  /* ---------- 图例 ---------- */
+  .legend{max-width:1500px;margin:56px auto 0;display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px}
+  .lbox{border-radius:var(--r-lg);background:var(--c-low);padding:20px;border:1px solid var(--outline-v)}
+  .lbox h3{font-size:14px;font-weight:700;margin-bottom:14px}
+  .lrow{display:flex;align-items:center;gap:11px;padding:6px 0;font-size:12.5px}
+  .lrow .sw2{width:14px;height:14px;border-radius:5px;flex-shrink:0}
+  .lrow .g{font-weight:700;width:26px}
+  .lrow .d{opacity:.62;font-size:11.5px}
+  .swatch{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+  .swatch div{font-family:var(--mono);font-size:10px;padding:6px 9px;border-radius:9px;
+    background:var(--c-high);border:1px solid var(--outline-v)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="logo"></div>
+    <div>
+      <h1>PhotoTidy</h1>
+      <div class="sub">类 Slidebox 的照片整理器 · Kotlin + Jetpack Compose Material 3</div>
+    </div>
+  </div>
+  <div class="meta-row">
+    <span class="tag">targetSdk <b>36</b>（Android 16）</span>
+    <span class="tag">compileSdk 36</span>
+    <span class="tag">minSdk 31</span>
+    <span class="tag">Compose BOM 2025.10.01</span>
+    <span class="tag">material3 <b>1.4.0</b></span>
+    <span class="tag">Kotlin 2.2.20 · AGP 8.13</span>
+    <span class="tag">无网络权限</span>
+  </div>
+  <div class="controls">
+    <button class="tg" onclick="toggleTheme()">🌗 切换 浅色 / 深色</button>
+    <button class="tg" onclick="alert('源码在项目根目录，用 Android Studio 打开即可运行')">📁 源码位置</button>
+  </div>
+</header>
+
+<div class="rail">
+
+  <!-- ============================ 1. 首页 ============================ -->
+  <div class="slot">
+    <h2>① 首页 · 时间线</h2>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>17:45</span><span class="r">♪ 5G <span class="batt">69</span></span></div>
+      <div class="body">
+        <div class="pad" style="padding-top:6px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="flex:1">
+              <div class="h-lg">整理</div>
+              <div class="cap" style="margin-top:2px">1,284 张 · 6.4 GB</div>
+            </div>
+            <div class="badge warn">部分授权</div>
+          </div>
+        </div>
+        <div class="gap12"></div>
+        <div class="pad">
+          <div class="hero-wrap">
+            <div class="hero-b"></div><div class="hero-b2"></div>
+            <div class="hero">
+              <img src="https://picsum.photos/seed/pt-hero/680/740" alt="" onerror="this.style.display='none'">
+              <div class="scrim"></div>
+              <div class="txt">
+                <span class="badge ghost">继续整理</span>
+                <div class="n">1,284 张</div>
+                <div class="d">从最新的一张开始，滑一滑就整理完了</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="gap10"></div>
+        <div class="pad" style="display:flex;align-items:baseline;justify-content:space-between">
+          <div><div class="sec">按时间</div><div class="cap">8 个月份</div></div>
+        </div>
+        <div class="gap10"></div>
+        <div class="months">
+          <div class="month"><div class="ph"><img src="https://picsum.photos/seed/pt-m1/240/220" onerror="this.style.display='none'"></div><div class="lb"><b>10 月</b><span>213 张</span></div></div>
+          <div class="month"><div class="ph"><img src="https://picsum.photos/seed/pt-m2/240/220" onerror="this.style.display='none'"></div><div class="lb"><b>9 月</b><span>341 张</span></div></div>
+          <div class="month"><div class="ph"><img src="https://picsum.photos/seed/pt-m3/240/220" onerror="this.style.display='none'"></div><div class="lb"><b>8 月</b><span>176 张</span></div></div>
+        </div>
+        <div class="gap16"></div>
+        <div class="pad" style="display:flex;align-items:center;justify-content:space-between">
+          <div><div class="sec">文件夹</div><div class="cap">设备上所有存图目录</div></div>
+          <div style="font-size:12.5px;font-weight:600;color:var(--primary)">全部</div>
+        </div>
+        <div class="gap10"></div>
+        <div class="frow"><div class="th"><img src="https://picsum.photos/seed/pt-cam/120/120" onerror="this.style.display='none'"></div>
+          <div class="nm"><b>相机</b><span>DCIM/Camera · 486 张</span></div><div class="done">✓ 已整理</div></div>
+        <div class="frow"><div class="th"><img src="https://picsum.photos/seed/pt-dl/120/120" onerror="this.style.display='none'"></div>
+          <div class="nm"><b>Download</b><span>Download · 132 张</span></div></div>
+        <div class="frow"><div class="th"><img src="https://picsum.photos/seed/pt-wx/120/120" onerror="this.style.display='none'"></div>
+          <div class="nm"><b>WeiXin</b><span>Pictures/WeiXin · 209 张</span></div></div>
+      </div>
+      <div class="fab"><svg viewBox="0 0 24 24"><path d="M12 2l1.9 5.6L19.5 9l-4.2 3.9 1.2 5.6L12 15.7 7.5 18.5l1.2-5.6L4.5 9l5.6-1.4z"/></svg>开始整理</div>
+      <nav class="nav">
+        <div class="it on"><div class="ic"><span class="pill"></span><svg viewBox="0 0 24 24"><path d="M4 12h6M14 6l6 6-6 6M4 6h6M4 18h6"/></svg></div>整理</div>
+        <div class="it"><div class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17l4.5-4.5 3.5 3.5 2.5-2.5L20 18"/></svg></div>相册</div>
+        <div class="it"><div class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/></svg></div>设置</div>
+      </nav>
+      <div class="home-bar"><i></i></div>
+    </div></div>
+    <div class="note">封面是两层错位卡片，把「还有非常多张」具象化。底部 FAB 把主操作放进拇指区。</div>
+  </div>
+
+  <!-- ============================ 2. 整理页 ============================ -->
+  <div class="slot">
+    <h2>② 整理页 · 核心</h2>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>17:46</span><span class="r">♪ 5G <span class="batt">68</span></span></div>
+      <div class="body">
+        <div class="topbar">
+          <div class="tb"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></div>
+          <div class="pill-btn">最近（全部）<svg viewBox="0 0 24 24"><path d="M4 8h16M4 16h16"/></svg></div>
+          <div class="tb"><span class="bdot">5</span><svg viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5"/><path d="M4 6.5h6"/><path d="M4 17.5h4"/></svg></div>
+          <div class="tb"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg></div>
+        </div>
+        <div class="prog">
+          <div class="pbar"><i></i></div>
+          <div class="prow"><span>437 / 1,284</span><span>2026 年 10 月 8 日 18:09</span></div>
+        </div>
+        <div class="card-area">
+          <div class="card armed">
+            <img src="https://picsum.photos/seed/pt-cur/680/900" onerror="this.style.display='none'">
+            <div class="rim"></div>
+            <div class="stamp k">保留 · 下一张</div>
+          </div>
+        </div>
+        <div class="hintline">左滑保留 · 上滑回收站 · 下滑撤销</div>
+        <div class="hintline" style="color:var(--primary);font-weight:600">已排队 回收 2 张 · 点右上角提交</div>
+        <div class="acts">
+          <div class="act u"><div class="ring"><svg viewBox="0 0 24 24"><path d="M10 8H5V3"/><path d="M5 8a8 8 0 1 1 1.5 9"/></svg></div>撤销</div>
+          <div class="act primary k"><div class="ring"><svg viewBox="0 0 24 24"><path d="M5 13l4.5 4.5L19 7"/></svg></div>保留</div>
+          <div class="act t"><div class="ring"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></div>清除</div>
+        </div>
+        <div class="gap8"></div>
+        <div class="movebar">
+          <div class="hd"><svg viewBox="0 0 24 24"><path d="M12 4v14M6 13l6 6 6-6"/></svg>点一下，把这张放进对应文件夹</div>
+          <div class="mrow">
+            <div class="mt"><svg viewBox="0 0 24 24"><path d="M3 7.5A2 2 0 0 1 5 5.5h3.2l1.4 2H19a2 2 0 0 1 2 2v7A2 2 0 0 1 19 18.5H5a2 2 0 0 1-2-2z"/><path d="M12 10.5v4.5M9.8 12.8L12 15l2.2-2.2"/></svg><span>相机</span><i>486</i></div>
+            <div class="mt"><svg viewBox="0 0 24 24"><path d="M3 7.5A2 2 0 0 1 5 5.5h3.2l1.4 2H19a2 2 0 0 1 2 2v7A2 2 0 0 1 19 18.5H5a2 2 0 0 1-2-2z"/><path d="M12 10.5v4.5M9.8 12.8L12 15l2.2-2.2"/></svg><span>截图</span><i>94</i></div>
+            <div class="mt"><svg viewBox="0 0 24 24"><path d="M3 7.5A2 2 0 0 1 5 5.5h3.2l1.4 2H19a2 2 0 0 1 2 2v7A2 2 0 0 1 19 18.5H5a2 2 0 0 1-2-2z"/><path d="M12 10.5v4.5M9.8 12.8L12 15l2.2-2.2"/></svg><span>Download</span><i>132</i></div>
+            <div class="mt"><svg viewBox="0 0 24 24"><path d="M3 7.5A2 2 0 0 1 5 5.5h3.2l1.4 2H19a2 2 0 0 1 2 2v7A2 2 0 0 1 19 18.5H5a2 2 0 0 1-2-2z"/><path d="M12 10.5v4.5M9.8 12.8L12 15l2.2-2.2"/></svg><span>微信</span><i>209</i></div>
+          </div>
+        </div>
+      </div>
+      <div class="home-bar" style="background:var(--c)"><i></i></div>
+    </div></div>
+    <div class="note">整页没有滚动容器。手势到阈值时卡片描边变色 + 轻震 + 印章变「松手生效」。</div>
+  </div>
+
+  <!-- ============================ 3. 相册页 ============================ -->
+  <div class="slot">
+    <h2>③ 相册页</h2>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>17:47</span><span class="r">♪ 5G <span class="batt">67</span></span></div>
+      <div class="body">
+        <div class="pad" style="padding-top:6px">
+          <div class="h-lg">相册</div>
+          <div class="cap" style="margin-top:2px">扫到的存图位置都在这里，点进去就能整理</div>
+        </div>
+        <div class="gap12"></div>
+        <div class="banner">
+          <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0"/></svg>
+          <div class="tx"><b>当前只看到部分照片</b><span>系统只允许应用访问你勾选的那些照片。</span></div>
+          <div class="go">选择更多</div>
+        </div>
+        <div class="gap16"></div>
+        <div class="grid2">
+          <div class="tile"><div class="ph"><img src="https://picsum.photos/seed/pt-a1/300/300" onerror="this.style.display='none'"><div class="s"></div><div class="c">486 张</div></div><div class="lb"><b>相机</b><span>DCIM/Camera</span></div></div>
+          <div class="tile"><div class="ph"><img src="https://picsum.photos/seed/pt-a2/300/300" onerror="this.style.display='none'"><div class="s"></div><div class="c">209 张</div></div><div class="lb"><b>WeiXin</b><span>Pictures/WeiXin</span></div></div>
+          <div class="tile"><div class="ph"><img src="https://picsum.photos/seed/pt-a3/300/300" onerror="this.style.display='none'"><div class="s"></div><div class="c">132 张</div></div><div class="lb"><b>Download</b><span>Download</span></div></div>
+          <div class="tile"><div class="ph"><img src="https://picsum.photos/seed/pt-a4/300/300" onerror="this.style.display='none'"><div class="s"></div><div class="c">94 张</div></div><div class="lb"><b>截图</b><span>Pictures/Screenshots</span></div></div>
+        </div>
+      </div>
+      <nav class="nav">
+        <div class="it"><div class="ic"><svg viewBox="0 0 24 24"><path d="M4 12h6M14 6l6 6-6 6M4 6h6M4 18h6"/></svg></div>整理</div>
+        <div class="it on"><div class="ic"><span class="pill"></span><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17l4.5-4.5 3.5 3.5 2.5-2.5L20 18"/></svg></div>相册</div>
+        <div class="it"><div class="ic"><span class="dot">23</span><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg></div>回收站</div>
+        <div class="it"><div class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2"/></svg></div>设置</div>
+      </nav>
+      <div class="home-bar"><i></i></div>
+    </div></div>
+    <div class="note">自适应网格（Adaptive 156dp），折叠屏展开 / 平板自动变多列 —— 这是 targetSdk 36 强制大屏可调整尺寸的应对。</div>
+  </div>
+
+  <!-- ============================ 4. 回收站 ============================ -->
+  <div class="slot">
+    <h2>④ 回收站</h2>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>17:48</span><span class="r">♪ 5G <span class="batt">66</span></span></div>
+      <div class="body" style="overflow-y:auto">
+        <div class="pad" style="padding-top:6px">
+          <div class="h-lg">回收站</div>
+          <div class="cap" style="margin-top:2px">7 张 · 30 天内可以还原，之后由系统自动清空</div>
+        </div>
+        <div class="gap16"></div>
+        <div class="g3">
+          <div class="gt sel"><img src="https://picsum.photos/seed/pt-y1/160/160" onerror="this.style.display='none'"><div class="ck"></div></div>
+          <div class="gt sel"><img src="https://picsum.photos/seed/pt-y2/160/160" onerror="this.style.display='none'"><div class="ck"></div></div>
+          <div class="gt"><img src="https://picsum.photos/seed/pt-y3/160/160" onerror="this.style.display='none'"><div class="ck"></div></div>
+          <div class="gt"><img src="https://picsum.photos/seed/pt-y4/160/160" onerror="this.style.display='none'"><div class="ck"></div></div>
+          <div class="gt"><img src="https://picsum.photos/seed/pt-y5/160/160" onerror="this.style.display='none'"><div class="ck"></div></div>
+          <div class="gt"><img src="https://picsum.photos/seed/pt-y6/160/160" onerror="this.style.display='none'"><div class="ck"></div></div>
+        </div>
+        <div class="sel-note">已选 2 张</div>
+        <div class="barrow">
+          <div class="btn"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 5v4h4"/></svg>还原到相册</div>
+          <div class="btn danger">彻底删除</div>
+        </div>
+        <div class="gap24"></div>
+      </div>
+      <div class="home-bar"><i></i></div>
+    </div></div>
+    <div class="note">只有系统回收站一个区：交出去的照片 30 天内可还原。整理中「排队待清除」的那些不在这里 —— 它们还没落盘，随时能在整理页撤回。</div>
+  </div>
+
+  <!-- ============================ 5. 设置 ============================ -->
+  <div class="slot">
+    <h2>⑤ 设置</h2>
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>17:49</span><span class="r">♪ 5G <span class="batt">65</span></span></div>
+      <div class="body" style="overflow-y:auto">
+        <div class="pad" style="padding-top:6px;display:flex;align-items:center;gap:6px">
+          <div class="tb" style="width:38px"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></div>
+          <div class="h-md">设置</div>
+        </div>
+        <div class="gap16"></div>
+        <div class="pad"><div class="sec">外观</div></div>
+        <div class="gap10"></div>
+        <div class="scard">
+          <b style="font-size:13.5px;font-weight:600">主题</b>
+          <div class="cap" style="margin-top:3px">整理照片时深色更省电，也更能凸显照片本身。</div>
+          <div class="seg"><div>跟随系统</div><div class="on">浅色</div><div>深色</div></div>
+        </div>
+        <div class="scard"><div class="srow">
+          <div class="ci"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="9" cy="10" r="1.4"/><circle cx="15" cy="10" r="1.4"/><circle cx="12" cy="15" r="1.4"/></svg></div>
+          <div class="tx"><b>动态取色（Material You）</b><span>从壁纸提取配色，让应用融入桌面</span></div>
+          <div class="sw"></div></div></div>
+        <div class="gap16"></div>
+        <div class="pad"><div class="sec">整理手感</div></div>
+        <div class="gap10"></div>
+        <div class="scard">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <b style="font-size:13.5px;font-weight:600">滑动灵敏度</b>
+            <span style="font-size:11.5px;color:var(--primary);font-weight:600">标准</span>
+          </div>
+          <div class="cap" style="margin-top:3px">调低＝轻轻一划就生效；调高＝要划得更远（防误触）。</div>
+          <div class="slider"><i></i><b></b></div>
+        </div>
+        <div class="scard">
+          <b style="font-size:13.5px;font-weight:600">提交方式</b>
+          <div class="cap" style="margin-top:3px">整理过程零弹窗；全部决定完点一次「提交」，由系统弹一次授权确认。</div>
+        </div>
+        <div class="scard"><div class="srow">
+          <div class="ci"><svg viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M10 8v8M14 8v8"/></svg></div>
+          <div class="tx"><b>震动反馈</b><span>滑到阈值时轻震，不用盯着屏幕也知道松手会生效</span></div>
+          <div class="sw"></div></div></div>
+        <div class="gap16"></div>
+        <div class="pad"><div class="sec">数据</div></div>
+        <div class="gap10"></div>
+        <div class="scard">
+          <div style="display:flex;align-items:center;gap:9px"><span style="color:var(--primary);font-size:14px">🛡</span><b style="font-size:13.5px;font-weight:600">隐私说明</b></div>
+          <div class="gap10"></div>
+          <div class="pl"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 4-7.5"/><path d="M3 4v5h5"/></svg>清单里没有网络权限，照片无法上传</div>
+          <div class="pl"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.4-3 8.2-7 9-4-.8-7-4.6-7-9V6z"/></svg>只申请 READ_MEDIA_IMAGES，不碰其他数据</div>
+          <div class="pl"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0"/></svg>删除与移动都由系统弹窗确认后才执行</div>
+        </div>
+        <div class="gap24"></div>
+      </div>
+      <div class="home-bar"><i></i></div>
+    </div></div>
+    <div class="note">滑动灵敏度是真实可调的：阈值按卡片尺寸 × 灵敏度系数计算，不是写死的 dp。</div>
+  </div>
+
+</div>
+
+<!-- ============================ 图例 ============================ -->
+<div class="legend">
+  <div class="lbox">
+    <h3>手势映射 · 颜色即语义</h3>
+    <div class="lrow"><span class="g">←</span><span class="sw2" style="background:var(--keep)"></span>左滑<b style="font-weight:600">保留</b><span class="d">／看下一张</span></div>
+    <div class="lrow"><span class="g">↑</span><span class="sw2" style="background:var(--trash)"></span>上滑<b style="font-weight:600">回收站</b><span class="d">／先排队，提交时才落盘</span></div>
+    <div class="lrow"><span class="g">↓</span><span class="sw2" style="background:var(--undo)"></span>下滑<b style="font-weight:600">撤销</b><span class="d">／精确回滚</span></div>
+    <div class="lrow" style="opacity:.65"><span class="g">⬇</span><span class="sw2" style="background:var(--primary)"></span>点文件夹<b style="font-weight:600">移动</b><span class="d">／卡片下滑飞出</span></div>
+  </div>
+  <div class="lbox">
+    <h3>语义色不参与动态取色</h3>
+    <div class="cap" style="margin-bottom:10px">
+      机身用品牌青绿 + Material You 动态取色；但「保留 / 回收站 / 撤销」三色恒定 ——
+      换主题不该改变用户的肌肉记忆。
+    </div>
+    <div class="swatch">
+      <div>keep #12B76A / #4BE08F</div>
+      <div>trash #E5484D / #FF6B6F</div>
+      <div>undo #6B7A76 / #9FB0AB</div>
+    </div>
+  </div>
+  <div class="lbox">
+    <h3>动效规范（自建 expressive 令牌）</h3>
+    <div class="cap" style="line-height:1.75">
+      <b style="color:var(--primary)">空间动效</b>用弹簧：位移／缩放／旋转，阻尼 0.82，允许轻微过冲。<br>
+      <b style="color:var(--primary)">效果动效</b>用缓动：颜色／透明度，220ms 标准贝塞尔，避免弹簧造成的透明度抖动。<br>
+      卡片飞出用 260ms 加速曲线，让「处理下一张」的节奏不拖沓。
+    </div>
+  </div>
+  <div class="lbox">
+    <h3>Android 16 硬约束已处理</h3>
+    <div class="cap" style="line-height:1.75">
+      · <b>edge-to-edge 强制</b>：背景铺满安全区，内容用 safeDrawing inset 让位。<br>
+      · <b>predictive back 默认开</b>：用 BackHandler 接管，不用 onBackPressed。<br>
+      · <b>大屏强制可调整尺寸</b>：≥600dp 自动切换 NavigationRail + 自适应网格。<br>
+      · <b>部分照片授权</b>：声明 READ_MEDIA_VISUAL_USER_SELECTED 并做三态处理。
+    </div>
+  </div>
+</div>
+
+<script>
+  function toggleTheme(){
+    const html = document.documentElement;
+    html.dataset.theme = html.dataset.theme === 'dark' ? 'light' : 'dark';
+  }
+</script>
+</body>
+</html>

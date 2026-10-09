@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 叠加的两张照片：既表达「相册」，也暗示「堆叠整理」 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 后一张卡片（只露出左上角） -->
+    <path
+        android:pathData="M38,32 C38,28.7 40.7,26 44,26 L72,26"
+        android:strokeColor="#9BF2DE"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- 主卡片 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,36 h40 a6,6 0 0 1 6,6 v24 a6,6 0 0 1 -6,6 h-40 a6,6 0 0 1 -6,-6 v-24 a6,6 0 0 1 6,-6 z" />
+
+    <!-- 太阳 -->
+    <path
+        android:fillColor="#006B5C"
+        android:pathData="M45,47 a4.2,4.2 0 1 0 0,8.4 a4.2,4.2 0 1 0 0,-8.4 z" />
+
+    <!-- 山峦 -->
+    <path
+        android:fillColor="#006B5C"
+        android:pathData="M28.6,68 L42,51.5 L50.5,61.5 L55.5,55 L68,68 Z" />
+</vector>

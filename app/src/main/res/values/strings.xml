@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  界面文案统一入口。
+
+  约定：
+   · 带参数的一律用位置占位符（%1$s / %1$d），不要用 getString 拼字符串 ——
+     拼接出来的句子在语序不同的语言里会读不通。
+   · 数量词走 <plurals name="photo_count">。中文只有 other 一种形式，
+     但英语、俄语、阿拉伯语有 2~6 种，先立好结构，将来加 values-en/ 不用改代码。
+   · 数据层（core/）不放任何文案：展示语言不该焊死在模型里。
+-->
+<resources>
+
+    <string name="app_name">PhotoTidy</string>
+
+    <!-- ============================================================ 导航 -->
+    <string name="tab_review">整理</string>
+    <string name="tab_albums">相册</string>
+    <string name="tab_settings">设置</string>
+
+    <!-- ============================================================ 通用 -->
+    <plurals name="photo_count">
+        <item quantity="other">%1$d 张</item>
+    </plurals>
+    <plurals name="selected_count">
+        <item quantity="other">已选 %1$d 张</item>
+    </plurals>
+
+    <string name="month_title">%1$d 年 %2$d 月</string>
+    <string name="month_short">%1$d 月</string>
+    <string name="month_count">%1$d 个月份</string>
+
+    <string name="action_all">全部</string>
+    <string name="action_back">返回</string>
+    <string name="action_got_it">知道了</string>
+    <string name="action_rescan">重新扫描</string>
+    <string name="action_think_again">再想想</string>
+
+    <!-- 系统标准目录：既是移动目标，也是相册名 -->
+    <string name="album_camera">相机</string>
+    <string name="album_screenshots">截图</string>
+    <string name="album_downloads">下载</string>
+
+    <!-- ============================================================ 整理范围 -->
+    <string name="scope_recent">最近</string>
+    <string name="scope_recent_all">最近（全部）</string>
+
+    <!-- ============================================================ 首页 -->
+    <string name="home_subtitle_empty">还没有可整理的照片</string>
+    <string name="home_subtitle">%1$s · %2$s</string>
+    <string name="badge_partial">部分授权</string>
+    <string name="home_section_time">按时间</string>
+    <string name="home_section_folders">文件夹</string>
+    <string name="home_section_folders_sub">设备上所有存图目录</string>
+    <string name="home_empty_title">这里还没有照片</string>
+    <string name="home_empty_desc_read">设备相册是空的，或者目前只授权了部分照片。</string>
+    <string name="home_empty_desc_denied">先授予照片访问权限，才能开始整理。</string>
+    <string name="home_hero_badge">继续整理</string>
+    <string name="home_hero_action">开始整理</string>
+    <string name="home_hero_subtitle">从最新的一张开始，滑一滑就整理完了</string>
+    <string name="cd_recent_photo">最近的照片</string>
+
+    <!-- ============================================================ 相册页 -->
+    <string name="albums_subtitle_empty">设备上还没有存图目录</string>
+    <string name="albums_subtitle">扫到的存图位置都在这里，点进去就能整理</string>
+    <string name="albums_empty_title">没有相册</string>
+    <string name="albums_empty_desc">设备上没有找到任何照片目录。</string>
+    <string name="partial_title">当前只看到部分照片</string>
+    <string name="partial_desc">系统只允许应用访问你勾选的那些照片。</string>
+    <string name="action_select_more">选择更多</string>
+
+    <!-- ============================================================ 回收站 -->
+    <string name="trash_title">回收站</string>
+    <string name="cd_back_settings">返回设置</string>
+    <string name="trash_subtitle_empty">交给系统的照片 30 天内可以还原，之后由系统自动清空</string>
+    <string name="trash_subtitle">%1$s · 30 天内可以还原，之后由系统自动清空</string>
+    <string name="trash_empty_title">回收站是空的</string>
+    <string name="trash_empty_desc">在整理页点「提交」之后，被清除的照片会出现在这里。</string>
+    <string name="trash_select_hint">先勾选要处理的照片</string>
+    <string name="action_restore">还原到相册</string>
+    <string name="action_delete_forever">彻底删除</string>
+    <string name="trash_delete_title">确认彻底删除这 %1$d 张？</string>
+    <string name="trash_delete_body">会释放约 %1$s。删除后无法恢复，也不会再被系统回收站兜底。</string>
+    <string name="action_confirm_delete">确认删除</string>
+    <string name="action_reconsider">我再想想</string>
+    <string name="trash_restored">已还原 %1$d 张</string>
+    <string name="trash_deleted">已删除 %1$d 张</string>
+
+    <!-- ============================================================ 设置页 -->
+    <string name="settings_section_dest">照片去向</string>
+    <string name="settings_trash_subtitle_empty">里面是空的</string>
+    <string name="settings_trash_subtitle">%1$d 张 · 30 天内可以还原</string>
+    <string name="settings_section_appearance">外观</string>
+    <string name="settings_theme_title">主题</string>
+    <string name="settings_theme_desc">整理照片时深色更省电、也更能凸显照片本身。</string>
+    <string name="settings_theme_system">跟随系统</string>
+    <string name="settings_theme_light">浅色</string>
+    <string name="settings_theme_dark">深色</string>
+    <string name="settings_dynamic_title">动态取色（Material You）</string>
+    <string name="settings_dynamic_desc">从壁纸提取配色，让应用融入你的桌面</string>
+    <string name="settings_pure_black_title">纯黑背景（AMOLED）</string>
+    <string name="settings_pure_black_desc">深色主题下用纯黑底，OLED 屏幕更省电</string>
+    <string name="settings_section_feel">整理手感</string>
+    <string name="settings_sensitivity_title">滑动灵敏度</string>
+    <string name="settings_sensitivity_low">灵敏</string>
+    <string name="settings_sensitivity_high">稳重</string>
+    <string name="settings_sensitivity_normal">标准</string>
+    <string name="settings_sensitivity_desc">调低=轻轻一划就生效；调高=要划得更远才生效（防误触）。</string>
+    <string name="settings_haptics_title">震动反馈</string>
+    <string name="settings_haptics_desc">滑到阈值时轻震一下，不用盯着屏幕也知道松手会生效</string>
+    <string name="settings_preview_title">显示下一张预览</string>
+    <string name="settings_preview_desc">当前照片后面透出下一张，更有「一叠纸」的实感</string>
+    <string name="settings_section_data">数据</string>
+    <string name="settings_empty_albums_title">显示空文件夹</string>
+    <string name="settings_empty_albums_desc">把 0 张照片的目录也列出来</string>
+    <string name="settings_privacy_title">隐私说明</string>
+    <string name="settings_privacy_no_network">清单里没有网络权限，照片无法上传</string>
+    <string name="settings_privacy_only_images">只申请 READ_MEDIA_IMAGES，不碰其他数据</string>
+    <string name="settings_privacy_confirm">删除与移动都由系统弹窗确认后才执行</string>
+    <string name="settings_version">版本 %1$s · targetSdk 36（Android 16）</string>
+
+    <!-- ============================================================ 整理页 -->
+    <string name="cd_exit_review">退出整理</string>
+    <string name="cd_switch_scope">切换整理范围</string>
+    <string name="cd_submit">提交这次整理</string>
+    <string name="cd_more">更多</string>
+    <string name="menu_help">使用方法</string>
+    <string name="menu_defer">跳过这张，稍后再看</string>
+    <string name="menu_restart">从头再整理一遍</string>
+    <string name="review_hint">左滑保留 · 上滑回收站 · 下滑撤销</string>
+    <string name="review_queued">已排队 %1$s · 点右上角提交</string>
+    <string name="review_idle">改动先排队，全部决定完再一次性提交</string>
+    <string name="summary_move">移动 %1$d 张</string>
+    <string name="summary_trash">回收 %1$d 张</string>
+    <string name="summary_join">%1$s + %2$s</string>
+
+    <string name="commit_dialog_title">提交这次整理？</string>
+    <string name="commit_dialog_move">移动 %1$d 张到对应相册</string>
+    <string name="commit_dialog_trash">把 %1$d 张放进系统回收站</string>
+    <string name="commit_dialog_note">提交后系统会弹一次授权，同意即生效。「保留」不产生任何改动。</string>
+    <string name="action_confirm_commit">确认提交</string>
+
+    <string name="finished_title">这一轮整理完了</string>
+    <string name="finished_desc">照片库还没有发生任何变化 —— 确认之前都有退路。</string>
+    <string name="stat_keep">保留</string>
+    <string name="stat_move">移动</string>
+    <string name="stat_trash">回收站</string>
+    <string name="action_submit_pending">提交这 %1$d 处改动</string>
+    <string name="action_back_home">返回首页</string>
+    <string name="action_restart">再来一轮</string>
+
+    <string name="action_undo">撤销</string>
+    <string name="action_keep">保留</string>
+    <string name="action_clear">清除</string>
+
+    <!-- ViewModel 产出的提示语（走 Snackbar），因此也必须可本地化 -->
+    <string name="commit_nothing_pending">没有待提交的改动</string>
+    <string name="commit_moved">已移动 %1$d 张</string>
+    <string name="commit_submitting_moves">正在提交 · 移动 %1$d 张</string>
+    <string name="commit_submitting_trash">正在提交 · 回收 %1$d 张</string>
+    <string name="commit_submitting_both">正在提交 · 移动 %1$d 张，回收 %2$d 张</string>
+    <string name="commit_done_moves">已完成 · 移动 %1$d 张</string>
+    <string name="commit_done_trash">已完成 · 回收 %1$d 张</string>
+    <string name="commit_done_both">已完成 · 移动 %1$d 张，回收 %2$d 张</string>
+
+    <!-- ============================================================ 手势卡片 -->
+    <string name="cd_current_photo">待整理的照片</string>
+    <string name="stamp_keep">保留 · 下一张</string>
+    <string name="stamp_trash">移到回收站</string>
+    <string name="stamp_undo">撤销上一个动作</string>
+    <string name="stamp_armed">松手生效</string>
+
+    <!-- ============================================================ 快捷移动条 -->
+    <string name="quick_move_hint">点一下，把这张放进对应文件夹</string>
+
+    <!-- ============================================================ 帮助 -->
+    <string name="help_title">怎么用</string>
+    <string name="help_subtitle">整页只有一张照片，按方向做决定就行。</string>
+    <string name="help_keep_title">向左滑</string>
+    <string name="help_keep_body">保留，看下一张</string>
+    <string name="help_trash_title">向上滑</string>
+    <string name="help_trash_body">先排进回收站，等最后提交时统一确认</string>
+    <string name="help_undo_title">向下滑</string>
+    <string name="help_undo_body">撤销上一个动作，后悔药永远在手边</string>
+    <string name="help_move_title">点下方文件夹</string>
+    <string name="help_move_body">把这张排进对应相册，同样等提交时一起生效</string>
+    <string name="help_footer">在你点「确认删除」之前，照片库不会有任何变化。</string>
+
+    <!-- ============================================================ 权限引导 -->
+    <string name="perm_title">先让 PhotoTidy 看到你的照片</string>
+    <string name="perm_subtitle">整理照片必须读取相册。下面是这个应用承诺的三件事。</string>
+    <string name="perm_offline_title">不联网，传不出去</string>
+    <string name="perm_offline_body">应用清单里没有网络权限，照片在物理上无法离开这台设备。</string>
+    <string name="perm_images_title">只要照片，不要别的</string>
+    <string name="perm_images_body">只申请 READ_MEDIA_IMAGES，不碰视频、位置、通讯录、通话记录。</string>
+    <string name="perm_confirm_title">动手之前一定问你</string>
+    <string name="perm_confirm_body">删除和移动都会弹出系统确认框，你点了同意才会真的改。</string>
+    <string name="action_grant">授予照片访问权限</string>
+    <string name="action_open_settings">已经拒绝了？去系统设置里打开</string>
+
+</resources>

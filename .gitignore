@@ -1,0 +1,59 @@
+# ===== Gradle / Android 构建产物 =====
+.gradle/
+**/build/
+.externalNativeBuild/
+.cxx/
+captures/
+# AGP 生成的发布/调试产物与中间产物
+*.apk
+*.aar
+*.ap_
+*.aab
+*.dex
+output-metadata.json
+*.hprof
+# Kotlin 编译器缓存与守护进程数据
+.kotlin/
+local.properties
+gradle.properties.local
+
+# ===== IDE (Android Studio / IntelliJ) =====
+.idea/
+*.iml
+*.ipr
+*.iws
+misc.xml
+deploymentTargetDropDown.xml
+render.experimental.xml
+savedStates/
+
+# ===== 本地工具数据（勿提交） =====
+.workbuddy/
+
+# ===== 验证截图（本地产物，勿提交） =====
+verify-shots/
+
+# ===== 本地/密钥配置（请勿提交） =====
+local.properties
+*.keystore
+*.jks
+google-services.json
+
+# ===== 操作系统文件 =====
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+# Windows
+ehthumbs.db
+Thumbs.db
+desktop.ini
+*.lnk
+
+# ===== 日志 / 临时文件 =====
+*.log
+*.tmp
+*.swp
+*~
