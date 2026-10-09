@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -42,6 +43,7 @@ import com.phototidy.ui.components.LibraryImage
 import com.phototidy.ui.theme.PhotoCardShape
 import com.phototidy.ui.theme.PhotoTidyMotion
 import com.phototidy.ui.theme.PhotoTidyTheme
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -100,19 +102,25 @@ fun SwipeablePhotoCard(
 
     fun thresholdY(): Float = (cardSize.height * 0.22f / sensitivity).coerceAtLeast(1f)
 
-    fun resolveIntent(): SwipeIntent {
-        val px = (offset.value.x / thresholdX()).coerceIn(-1f, 1f)
-        val py = (offset.value.y / thresholdY()).coerceIn(-1f, 1f)
+    /**
+     * 把归一化偏移归到四个语义方向之一。
+     * 死区 / 右滑不绑定 → None。这是「方向判定」的唯一真源，
+     * 既供 [resolveIntent] 判断是否越过阈值，也供下方绘制反馈（liveIntent）使用，避免两套映射各写一遍。
+     */
+    fun classifyIntent(px: Float, py: Float): SwipeIntent {
         if (abs(px) < 0.04f && abs(py) < 0.04f) return SwipeIntent.None
         val horizontalDominant = abs(px) >= abs(py)
         // 右滑不绑定任何动作（收藏已移除），水平方向只留「左滑 = 保留」
-        if (horizontalDominant && px > 0f) return SwipeIntent.None
-        val dir = if (horizontalDominant) {
-            SwipeIntent.Keep
-        } else {
-            if (py < 0f) SwipeIntent.Trash else SwipeIntent.Undo
-        }
-        val progress = if (horizontalDominant) abs(px) else abs(py)
+        if (horizontalDominant) return if (px > 0f) SwipeIntent.None else SwipeIntent.Keep
+        return if (py < 0f) SwipeIntent.Trash else SwipeIntent.Undo
+    }
+
+    fun resolveIntent(): SwipeIntent {
+        val px = (offset.value.x / thresholdX()).coerceIn(-1f, 1f)
+        val py = (offset.value.y / thresholdY()).coerceIn(-1f, 1f)
+        val dir = classifyIntent(px, py)
+        if (dir == SwipeIntent.None) return SwipeIntent.None
+        val progress = if (abs(px) >= abs(py)) abs(px) else abs(py)
         return if (progress >= 1f) dir else SwipeIntent.None
     }
 
@@ -120,11 +128,7 @@ fun SwipeablePhotoCard(
     val px = (offset.value.x / thresholdX()).coerceIn(-1f, 1f)
     val py = (offset.value.y / thresholdY()).coerceIn(-1f, 1f)
     val horizontalDominant = abs(px) >= abs(py)
-    val liveIntent: SwipeIntent = when {
-        abs(px) < 0.04f && abs(py) < 0.04f -> SwipeIntent.None
-        horizontalDominant -> if (px < 0f) SwipeIntent.Keep else SwipeIntent.None
-        else -> if (py < 0f) SwipeIntent.Trash else SwipeIntent.Undo
-    }
+    val liveIntent: SwipeIntent = classifyIntent(px, py)
     val liveProgress = if (liveIntent == SwipeIntent.None) {
         0f
     } else if (horizontalDominant) {
@@ -158,7 +162,10 @@ fun SwipeablePhotoCard(
 
     // 外部触发的「移动到相册」：卡片往下滑出屏幕，用空间位移表达「放进文件夹」
     LaunchedEffect(moveTicket) {
-        if (moveTicket == 0L || moveTarget == null || busy) return@LaunchedEffect
+        if (moveTicket == 0L || moveTarget == null) return@LaunchedEffect
+        // busy 为真说明上一张卡片的飞出动画还在跑：先等它结束再处理本次「移动」，
+        // 而不是直接 return —— 直接 return 会静默吞掉 onAction(Move)，并让 moveTarget 卡在非空态。
+        if (busy) snapshotFlow { busy }.first { !it }
         flyOutTo(Offset(offset.value.x, cardSize.height * 1.35f))
         onAction(ReviewAction.Move, moveTarget)
     }

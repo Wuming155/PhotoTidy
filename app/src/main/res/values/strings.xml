@@ -85,6 +85,7 @@
     <string name="action_reconsider">我再想想</string>
     <string name="trash_restored">已还原 %1$d 张</string>
     <string name="trash_deleted">已删除 %1$d 张</string>
+    <string name="trash_load_more_retry">加载失败，点此重试</string>
 
     <!-- ============================================================ 设置页 -->
     <string name="settings_section_dest">照片去向</string>

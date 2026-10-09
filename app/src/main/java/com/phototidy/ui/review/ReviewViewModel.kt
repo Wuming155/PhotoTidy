@@ -1,6 +1,6 @@
 package com.phototidy.ui.review
 
-import android.content.res.Resources
+import com.phototidy.core.StringProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
@@ -8,7 +8,8 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.phototidy.Graph
 import com.phototidy.R
 import com.phototidy.core.media.MediaOpCoordinator
-import com.phototidy.core.media.MediaStoreRepository
+import com.phototidy.core.media.MediaRepository
+import com.phototidy.core.media.computeTargetPath
 import com.phototidy.core.media.SessionStore
 import com.phototidy.core.media.StagingTrash
 import com.phototidy.core.model.MediaAlbum
@@ -89,11 +90,11 @@ private const val REFILL_BELOW = PAGE_SIZE / 2
  * 长会话下是 O(n²)，滑到后面每一张都明显变卡。
  */
 class ReviewViewModel(
-    private val repo: MediaStoreRepository,
+    private val repo: MediaRepository,
     private val staging: StagingTrash,
     private val ops: MediaOpCoordinator,
     private val session: SessionStore,
-    private val res: Resources,
+    private val strings: StringProvider,
     private val scope: MediaScope,
     totalCount: Int,
     initialMoveTargets: List<MediaAlbum>,
@@ -125,10 +126,10 @@ class ReviewViewModel(
     private val pendingMoves = LinkedHashMap<Long, PendingMove>()
 
     // ---- 增量计数器：syncState() 必须是 O(1) ----
+    // trashedCount / movedCount 不再单独维护：直接在 syncState() 里由 staging.items / pendingMoves 派生，
+    // 从根上消除「计数器与队列背离」（见 Nit5）。
     private var processedCount = 0
     private var keptCount = 0
-    private var trashedCount = 0
-    private var movedCount = 0
 
     private val _state = MutableStateFlow(
         ReviewUiState(
@@ -167,7 +168,6 @@ class ReviewViewModel(
         staging.stage(image)
         history.addLast(ReviewRecord(image, ReviewAction.Trash))
         processedCount++
-        trashedCount++
         persist()
         syncState()
     }
@@ -182,14 +182,13 @@ class ReviewViewModel(
         val image = advance() ?: return
         pendingMoves[image.id] = PendingMove(
             imageId = image.id,
-            targetPath = repo.targetPathFor(album),
+            targetPath = computeTargetPath(album),
             albumName = album.name,
             bucketId = album.bucketId,
             albumPath = album.relativePath,
         )
         history.addLast(ReviewRecord(image, ReviewAction.Move, targetAlbum = album.name))
         processedCount++
-        movedCount++
         persist()
         syncState()
     }
@@ -204,12 +203,10 @@ class ReviewViewModel(
         when (last.action) {
             ReviewAction.Trash -> {
                 staging.unstage(last.image.id)
-                trashedCount--
             }
 
             ReviewAction.Move -> {
                 pendingMoves.remove(last.image.id)
-                movedCount--
             }
 
             ReviewAction.Keep -> keptCount--
@@ -232,8 +229,6 @@ class ReviewViewModel(
         history.clear()
         processedCount = 0
         keptCount = 0
-        trashedCount = 0
-        movedCount = 0
         syncState()
     }
 
@@ -261,7 +256,7 @@ class ReviewViewModel(
         val moves = pendingMoves.values.toList()
         val trashes = staging.items.value
         if (moves.isEmpty() && trashes.isEmpty()) {
-            ops.emit(res.getString(R.string.commit_nothing_pending))
+            ops.emit(strings.get(R.string.commit_nothing_pending))
             return
         }
 
@@ -276,7 +271,7 @@ class ReviewViewModel(
                     successMessage = if (trashes.isEmpty()) {
                         doneLabel(moves.size, 0)
                     } else {
-                        res.getString(R.string.commit_moved, moves.size)
+                        strings.get(R.string.commit_moved, moves.size)
                     },
                     onSuccess = { moves.forEach { move -> pendingMoves.remove(move.imageId) } },
                 ) { repo.moveToAlbums(moves) }
@@ -291,8 +286,11 @@ class ReviewViewModel(
                 ) { attempt -> repo.moveToSystemTrash(trashes.map { it.id }, attempt) }
             }
 
-            // 落盘的那份「打算」到此兑现，清掉，免得下次冷启动又把已完成的改动捡回来
-            session.clearPendingMoves(scope.key)
+            // 把落盘的「打算」与当前内存状态对齐：
+            // 成功时 onSuccess 已经把 pendingMoves 清空，这里存空列表等价于清除；
+            // 被拒时仍留在内存里的意图必须保留，否则进程被杀就会丢掉这批「打算」
+            // （与「意图可恢复」的设计自相矛盾，详见 R1）。
+            session.savePendingMoves(scope.key, pendingMoves.values.toList())
             session.saveStaging(staging.items.value.map { it.id })
 
             _state.update { it.copy(submitting = false, submittingLabel = "") }
@@ -304,16 +302,16 @@ class ReviewViewModel(
 
     private fun pendingLabel(moves: Int, trashes: Int): String = when {
         moves > 0 && trashes > 0 ->
-            res.getString(R.string.commit_submitting_both, moves, trashes)
+            strings.get(R.string.commit_submitting_both, moves, trashes)
 
-        moves > 0 -> res.getString(R.string.commit_submitting_moves, moves)
-        else -> res.getString(R.string.commit_submitting_trash, trashes)
+        moves > 0 -> strings.get(R.string.commit_submitting_moves, moves)
+        else -> strings.get(R.string.commit_submitting_trash, trashes)
     }
 
     private fun doneLabel(moves: Int, trashes: Int): String = when {
-        moves > 0 && trashes > 0 -> res.getString(R.string.commit_done_both, moves, trashes)
-        moves > 0 -> res.getString(R.string.commit_done_moves, moves)
-        else -> res.getString(R.string.commit_done_trash, trashes)
+        moves > 0 && trashes > 0 -> strings.get(R.string.commit_done_both, moves, trashes)
+        moves > 0 -> strings.get(R.string.commit_done_moves, moves)
+        else -> strings.get(R.string.commit_done_trash, trashes)
     }
 
     // ------------------------------------------------------------ 队列窗口
@@ -385,8 +383,9 @@ class ReviewViewModel(
                 finished = remainingCount() == 0,
                 preparing = at(0) == null && remainingCount() > 0,
                 keptCount = keptCount,
-                trashedCount = trashedCount,
-                movedCount = movedCount,
+                // 直接由队列大小派生，队列与计数永不背离（见 Nit5）
+                trashedCount = staging.items.value.size,
+                movedCount = pendingMoves.size,
                 // 「已经产生过非保留改动、且全部结算完」——用计数器判断，不再遍历历史
                 committed = it.committed || (pendingMoves.isEmpty() &&
                     staging.items.value.isEmpty() &&
@@ -425,7 +424,6 @@ class ReviewViewModel(
                 pendingMoves[move.imageId] = move
                 history.addLast(ReviewRecord(image, ReviewAction.Move, targetAlbum = move.albumName))
                 processedCount++
-                movedCount++
             }
             syncState()
         }
@@ -445,7 +443,7 @@ class ReviewViewModel(
                     staging = Graph.stagingTrash,
                     ops = Graph.mediaOps,
                     session = Graph.sessionStore,
-                    res = Graph.resources,
+                    strings = Graph.stringProvider,
                     scope = scope,
                     totalCount = total,
                     initialMoveTargets = moveTargets,

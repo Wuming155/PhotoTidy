@@ -22,12 +22,6 @@ fun Long.toPhotoDateTime(): String {
     return "${DATE.format(at)} ${TIME.format(at)}"
 }
 
-fun Long.toPhotoDate(): String =
-    DATE.format(Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault()))
-
-fun Long.toPhotoTime(): String =
-    TIME.format(Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault()))
-
 /**
  * 1234 -> "1,234"。
  *

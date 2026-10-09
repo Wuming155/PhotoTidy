@@ -163,16 +163,11 @@ object SemanticColors {
     val Trash = Color(0xFFE5484D)
     val TrashDark = Color(0xFFFF6B6F)
 
-    /** 收藏 */
-    val Favorite = Color(0xFFE5247B)
-    val FavoriteDark = Color(0xFFFF7BB0)
-
     /** 撤销（中性，不与三个主语义抢注意力） */
     val Undo = Color(0xFF6B7A76)
     val UndoDark = Color(0xFF9FB0AB)
 
     fun keep(isDark: Boolean) = if (isDark) KeepDark else Keep
     fun trash(isDark: Boolean) = if (isDark) TrashDark else Trash
-    fun favorite(isDark: Boolean) = if (isDark) FavoriteDark else Favorite
     fun undo(isDark: Boolean) = if (isDark) UndoDark else Undo
 }

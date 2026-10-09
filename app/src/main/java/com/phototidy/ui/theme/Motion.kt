@@ -6,7 +6,6 @@ import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.ui.unit.IntOffset
 
 /**
  * 动效令牌 —— 手写的 Material 3 Expressive 运动规范。
@@ -31,12 +30,6 @@ object PhotoTidyMotion {
     /** 标准缓动。 */
     val Standard: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
 
-    /** 空间默认：卡片归位、页面切换，允许轻微过冲。 */
-    fun <T> spatialDefault(): FiniteAnimationSpec<T> = spring(
-        dampingRatio = 0.82f,
-        stiffness = Spring.StiffnessMediumLow,
-    )
-
     /** 空间快速：手势跟随后松手、按钮形变。阻尼更高，避免「晃」。 */
     fun <T> spatialFast(): FiniteAnimationSpec<T> = spring(
         dampingRatio = 0.9f,
@@ -57,7 +50,4 @@ object PhotoTidyMotion {
 
     /** 照片飞出屏幕：比默认更快，让「处理下一张」的节奏不拖沓。 */
     fun <T> dismissal(): FiniteAnimationSpec<T> = tween(durationMillis = 260, easing = EmphasizedAccelerate)
-
-    /** 常用 IntOffset 弹簧，供 AnimatedContent / offset 复用。 */
-    fun offsetSpring(): FiniteAnimationSpec<IntOffset> = spatialFast()
 }

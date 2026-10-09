@@ -77,7 +77,7 @@ sealed interface MediaOpResult {
  *     此时改用 `MediaStore.createXxxRequest()` 拉起系统授权框，用户同意后重试。
  *  4) 不做乐观更新。写失败必须回到 UI，让用户明确知道照片没被改动。
  */
-class MediaStoreRepository(private val context: Context) {
+class MediaStoreRepository(private val context: Context) : MediaRepository {
 
     private val resolver: ContentResolver = context.contentResolver
     private val collection: Uri = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
@@ -182,7 +182,7 @@ class MediaStoreRepository(private val context: Context) {
      * 落盘的只有 id，冷启动时再回 MediaStore 换回完整元数据 ——
      * 期间已经被删掉的照片自然不会被带回来，不需要额外的失效判定。
      */
-    suspend fun imagesByIds(ids: Collection<Long>): List<MediaImage> = withContext(Dispatchers.IO) {
+    override suspend fun imagesByIds(ids: Collection<Long>): List<MediaImage> = withContext(Dispatchers.IO) {
         if (ids.isEmpty()) return@withContext emptyList()
         val out = ArrayList<MediaImage>(ids.size)
         // SQLite 的变量上限是 999，分批查询
@@ -231,7 +231,7 @@ class MediaStoreRepository(private val context: Context) {
      * 实现方式是改写 `RELATIVE_PATH` —— 分区存储下这是唯一能让「其他相册应用也看得见」的移动方式，
      * 直接操作文件路径从 Android 11 起对共享目录已不可行。
      */
-    suspend fun moveToAlbums(items: List<PendingMove>): MediaOpResult =
+    override suspend fun moveToAlbums(items: List<PendingMove>): MediaOpResult =
         withContext(Dispatchers.IO) {
             if (items.isEmpty()) return@withContext MediaOpResult.Success
             val entries = items.map { move ->
@@ -245,19 +245,6 @@ class MediaStoreRepository(private val context: Context) {
             )
         }
 
-    /**
-     * 计算落点目录。
-     * 图片只能落在 DCIM 或 Pictures 这两棵子树下，且已有相册要复用它的真实路径（否则会造出一堆重名文件夹）。
-     *
-     * 刻意公开：落点必须在**入队时**就定下来（排队阶段）而不是提交时，
-     * 否则「会话中途相册被别的应用改名」会让排好的队指向别处。
-     */
-    fun targetPathFor(album: MediaAlbum): String {
-        val existing = album.relativePath.trim('/')
-        if (existing.isNotBlank() && existing.endsWith(album.name)) return "$existing/"
-        val root = existing.substringBefore('/').ifBlank { "Pictures" }
-        return "$root/${album.name}/"
-    }
 
     /**
      * 移入系统回收站（在系统相册里可见，30 天后自动清空）。
@@ -272,7 +259,7 @@ class MediaStoreRepository(private val context: Context) {
      *
      * [attempt] > 0 表示用户已经同意过 —— 系统已完成，直接算成功。
      */
-    suspend fun moveToSystemTrash(imageIds: List<Long>, attempt: Int = 0): MediaOpResult {
+    override suspend fun moveToSystemTrash(imageIds: List<Long>, attempt: Int): MediaOpResult {
         if (imageIds.isEmpty()) return MediaOpResult.Success
         if (attempt > 0) return MediaOpResult.Success
         return withContext(Dispatchers.IO) {
@@ -423,7 +410,7 @@ class MediaStoreRepository(private val context: Context) {
         val id = getLong(c.id)
         return MediaImage(
             id = id,
-            uri = ContentUris.withAppendedId(collection, id),
+            uri = ContentUris.withAppendedId(collection, id).toString(),
             displayName = getString(c.name).orEmpty(),
             takenAtMillis = takenAt(c),
             addedAtMillis = getLong(c.added) * 1000L,
@@ -518,4 +505,29 @@ class MediaStoreRepository(private val context: Context) {
                 " ${MediaStore.MediaColumns.DATE_ADDED} DESC," +
                 " ${MediaStore.MediaColumns._ID} DESC"
     }
+}
+
+/**
+ * 计算落点目录。
+ *
+ * 图片只能落在 DCIM 或 Pictures 这两棵子树下，且已有相册要复用它的真实路径（否则会造出一堆重名文件夹）。
+ *
+ * 刻意做成**顶层纯函数**：落点必须在**入队时**就定下来（排队阶段）而不是提交时，
+ * 否则「会话中途相册被别的应用改名」会让排好的队指向别处；
+ * 做成纯函数也方便单测，不依赖 [MediaStoreRepository] 持有的 `Context`。
+ *
+ * 复用时走大小写不敏感匹配（[String.endsWith] 的 ignoreCase）：
+ * 当 `relativePath` 是 `DCIM/camera/`（小写）而相册名是 `Camera`（大写）时，
+ * 若用大小写敏感判断会误判为「没有现成目录」而新建 `DCIM/Camera/`，
+ * 与原有目录形成异大小写重名 —— 在 FAT / 类 FAT 文件系统上会出问题。
+ */
+fun computeTargetPath(album: MediaAlbum): String {
+    val existing = album.relativePath.trim('/')
+    if (existing.isNotBlank() && album.name.isNotBlank() &&
+        existing.endsWith(album.name, ignoreCase = true)
+    ) {
+        return "$existing/"
+    }
+    val root = existing.substringBefore('/').ifBlank { "Pictures" }
+    return "$root/${album.name}/"
 }

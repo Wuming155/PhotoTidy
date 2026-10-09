@@ -35,9 +35,6 @@ object PhotoTidyTheme {
     val trash: androidx.compose.ui.graphics.Color
         @Composable @ReadOnlyComposable get() = SemanticColors.trash(state.isDark)
 
-    val favorite: androidx.compose.ui.graphics.Color
-        @Composable @ReadOnlyComposable get() = SemanticColors.favorite(state.isDark)
-
     val undo: androidx.compose.ui.graphics.Color
         @Composable @ReadOnlyComposable get() = SemanticColors.undo(state.isDark)
 }

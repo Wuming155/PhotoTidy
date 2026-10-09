@@ -47,6 +47,7 @@ data class LibraryUiState(
     val trash: List<MediaImage> = emptyList(),
     val trashCount: Int = 0,
     val trashLoadingMore: Boolean = false,
+    val trashLoadError: Boolean = false,
     val showEmptyAlbums: Boolean = false,
     val error: String? = null,
 ) {
@@ -138,7 +139,7 @@ class LibraryViewModel(
         val current = _state.value
         if (current.trashLoadingMore) return
         if (current.trash.size >= current.trashCount) return
-        _state.update { it.copy(trashLoadingMore = true) }
+        _state.update { it.copy(trashLoadingMore = true, trashLoadError = false) }
         viewModelScope.launch {
             val next = runCatching { repo.pageTrashed(current.trash.size, TRASH_PAGE_SIZE) }
                 .getOrDefault(emptyList())
@@ -148,6 +149,9 @@ class LibraryViewModel(
                     // 取不满一页说明到头了；把真实条数收敛一下，避免滚动到底还在请求
                     trashCount = if (next.size < TRASH_PAGE_SIZE) it.trash.size + next.size else it.trashCount,
                     trashLoadingMore = false,
+                    // 期望还有更多却空手而归 = 本次加载失败。置位让 UI 给出重试入口，
+                    // 否则 LaunchedEffect(systemTrash.size) 因 size 不变不再触发，spinner 会一直转（见 FYI2）。
+                    trashLoadError = next.isEmpty() && it.trash.size < it.trashCount,
                 )
             }
         }

@@ -3,8 +3,11 @@ package com.phototidy
 import android.app.Application
 import android.content.Context
 import android.content.res.Resources
+import com.phototidy.core.StringProvider
+import com.phototidy.core.ResourcesStringProvider
 import com.phototidy.core.media.MediaOpCoordinator
 import com.phototidy.core.media.MediaStoreRepository
+import com.phototidy.core.media.RealSessionStore
 import com.phototidy.core.media.SessionStore
 import com.phototidy.core.media.StagingTrash
 import com.phototidy.core.settings.SettingsStore
@@ -32,7 +35,10 @@ object Graph {
 
     val stagingTrash: StagingTrash by lazy { StagingTrash() }
 
-    val sessionStore: SessionStore by lazy { SessionStore(appContext) }
+    val sessionStore: SessionStore by lazy { RealSessionStore(appContext) }
+
+    /** ViewModel 里拼提示语要用 —— 它们没有 Context，但需要拿到本地化后的文案。 */
+    val stringProvider: StringProvider by lazy { ResourcesStringProvider(appContext.resources) }
 
     val mediaOps: MediaOpCoordinator by lazy { MediaOpCoordinator() }
 

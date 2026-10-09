@@ -12,6 +12,9 @@ import org.json.JSONObject
  * 解决的是 README 里承认过的那条取舍：会话级提交把待办放在内存里，
  * 整理到一半应用被系统回收（或者用户被系统清后台），排好的队就全没了。
  *
+ * 做成接口是为了让 [com.phototidy.ui.review.ReviewViewModel] 能在 JVM 单测里跑 ——
+ * 测试里注入一个内存实现即可，不必构造 `Context` / `SharedPreferences`。
+ *
  * 三条设计约束：
  *  1. **只存 id，不存照片**。排队状态需要的是「哪几张」和「挪到哪」，
  *     完整元数据在恢复时回 MediaStore 换回来即可 —— 期间已经消失的照片自然被剔除，
@@ -23,26 +26,36 @@ import org.json.JSONObject
  * 注意：这里保存的是**意图**（打算删哪些、打算挪到哪），不是事实。
  * 照片本身从头到尾没有被改动过 —— 应用被回收时丢掉的也只是「还没提交的打算」。
  */
-class SessionStore(context: Context) {
+interface SessionStore {
+    fun saveStaging(imageIds: List<Long>)
+    fun loadStaging(): List<Long>
+    fun clearStaging()
+    fun savePendingMoves(scopeKey: String, moves: List<PendingMove>)
+    fun loadPendingMoves(scopeKey: String): List<PendingMove>
+    fun clearPendingMoves(scopeKey: String)
+}
+
+/** 基于应用私有 `SharedPreferences` 的生产实现。 */
+class RealSessionStore(context: Context) : SessionStore {
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences("phototidy_session", Context.MODE_PRIVATE)
 
     // ----------------------------------------------------------- 待清除队列（全局）
 
-    fun saveStaging(imageIds: List<Long>) {
+    override fun saveStaging(imageIds: List<Long>) {
         prefs.edit().putString(KEY_STAGING, JSONArray(imageIds).toString()).apply()
     }
 
-    fun loadStaging(): List<Long> = readIdArray(prefs.getString(KEY_STAGING, null))
+    override fun loadStaging(): List<Long> = readIdArray(prefs.getString(KEY_STAGING, null))
 
-    fun clearStaging() {
+    override fun clearStaging() {
         prefs.edit().remove(KEY_STAGING).apply()
     }
 
     // ----------------------------------------------------------- 待移动表（按范围）
 
-    fun savePendingMoves(scopeKey: String, moves: List<PendingMove>) {
+    override fun savePendingMoves(scopeKey: String, moves: List<PendingMove>) {
         val array = JSONArray()
         moves.forEach { move ->
             array.put(
@@ -58,7 +71,7 @@ class SessionStore(context: Context) {
         prefs.edit().putString(pendingKey(scopeKey), array.toString()).apply()
     }
 
-    fun loadPendingMoves(scopeKey: String): List<PendingMove> {
+    override fun loadPendingMoves(scopeKey: String): List<PendingMove> {
         val raw = prefs.getString(pendingKey(scopeKey), null) ?: return emptyList()
         return runCatching {
             val array = JSONArray(raw)
@@ -77,7 +90,7 @@ class SessionStore(context: Context) {
         }.getOrDefault(emptyList())
     }
 
-    fun clearPendingMoves(scopeKey: String) {
+    override fun clearPendingMoves(scopeKey: String) {
         prefs.edit().remove(pendingKey(scopeKey)).apply()
     }
 

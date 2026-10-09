@@ -41,8 +41,6 @@ class MediaOpCoordinator {
     /** 正在等用户做选择的那一次授权。同一时刻只允许一个。 */
     private var waiting: CancellableContinuation<Boolean>? = null
 
-    val hasPendingConsent: Boolean get() = waiting != null
-
     /**
      * 执行一次媒体写操作，必要时等用户授权。
      *
@@ -109,6 +107,10 @@ class MediaOpCoordinator {
     /** 挂起直到用户在系统框上做出选择；没有订阅者时立即返回 false。 */
     private suspend fun awaitConsent(sender: IntentSender): Boolean =
         suspendCancellableCoroutine { continuation ->
+            // 正常路径下 execute() 会等 awaitConsent 完全返回后才递归，所以走到这里时 waiting 必为 null。
+            // 但若将来调用方并发发起授权（例如单会话 UI 同时触发两次），cancel 会直接取消上一个等待协程，
+            // 而它整条调用链没有 onFailure 通知 —— 调用方可能收不到「被跳过」的信号。
+            // 这是已知隐患，单会话 UI 当前触发不到，留此警示。
             waiting?.cancel()
             waiting = continuation
             val delivered = _consent.tryEmit(IntentSenderRequest.Builder(sender).build())

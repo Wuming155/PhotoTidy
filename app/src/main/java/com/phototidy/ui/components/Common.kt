@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import android.net.Uri
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
@@ -54,7 +55,7 @@ fun LibraryImage(
     }
     AsyncImage(
         model = ImageRequest.Builder(LocalContext.current)
-            .data(image.uri)
+            .data(Uri.parse(image.uri))
             .crossfade(true)
             .build(),
         contentDescription = contentDescription,
@@ -221,24 +222,3 @@ fun TinyBadge(
     }
 }
 
-/** 进度 + 张数的一行元信息。 */
-@Composable
-fun MetaLine(
-    text: String,
-    modifier: Modifier = Modifier,
-) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = modifier,
-    )
-}
-
-/** 占满父容器的居中承载，常用于 loading。 */
-@Composable
-fun FullScreenBox(content: @Composable () -> Unit) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { content() }
-}

@@ -77,6 +77,9 @@ fun TrashScreen(
     onRestore: (List<MediaImage>) -> Unit,
     onDelete: (List<MediaImage>) -> Unit,
     onLoadMore: () -> Unit,
+    loadingMore: Boolean = false,
+    loadError: Boolean = false,
+    onRetry: () -> Unit = {},
     onBack: () -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
@@ -163,10 +166,16 @@ fun TrashScreen(
                         .padding(vertical = 20.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator(
-                        strokeWidth = 2.dp,
-                        modifier = Modifier.size(24.dp),
-                    )
+                    when {
+                        loadingMore -> CircularProgressIndicator(
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(24.dp),
+                        )
+                        loadError -> OutlinedButton(onClick = onRetry) {
+                            Text(stringResource(R.string.trash_load_more_retry))
+                        }
+                        else -> Spacer(Modifier.height(1.dp))
+                    }
                 }
             }
         }

@@ -59,6 +59,14 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    testOptions {
+        unitTests {
+            // 让 stub 版 android.jar 的方法返回默认值而非抛 "Method ... not mocked"，
+            // 以便纯逻辑（如 ReviewViewModel 状态机）能脱离设备跑 JVM 单测。
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {
@@ -80,4 +88,7 @@ dependencies {
     implementation(libs.coil.compose)
 
     debugImplementation(libs.androidx.ui.tooling)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

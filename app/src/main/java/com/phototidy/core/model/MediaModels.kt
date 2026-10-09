@@ -1,7 +1,5 @@
 package com.phototidy.core.model
 
-import android.net.Uri
-
 /**
  * 一张照片的元数据快照。
  *
@@ -10,7 +8,14 @@ import android.net.Uri
  */
 data class MediaImage(
     val id: Long,
-    val uri: Uri,
+    /**
+     * 内容 URI 的字符串形式（例如 `content://media/external/images/media/42`）。
+     *
+     * 用 `String` 而非 `android.net.Uri` 是有意为之：这样 [MediaImage] 不依赖 Android 框架类型，
+     * 整理会话的纯逻辑（撤销栈 / 窗口 / 计数）就能在 JVM 单测里直接构造，无需 Robolectric。
+     * 真正需要 `Uri` 的写操作（移动 / 进回收站）在 `MediaStoreRepository.uriFor` 处现转。
+     */
+    val uri: String,
     val displayName: String,
     /** 拍摄时间（毫秒）。系统可能没写 DATE_TAKEN，退化用入库时间。 */
     val takenAtMillis: Long,
@@ -25,14 +30,10 @@ data class MediaImage(
     val isTrashed: Boolean,
 ) {
     /** Coil 缓存键。URI 已包含 id，天然唯一。 */
-    val key: String get() = uri.toString()
+    val key: String get() = uri
 
     val aspectRatio: Float
         get() = if (width > 0 && height > 0) width.toFloat() / height.toFloat() else 1f
-
-    /** 相册页「移动到这里」时用于计算的落点目录。 */
-    val parentPath: String
-        get() = relativePath.trimEnd('/').substringBeforeLast('/', "")
 }
 
 /**
