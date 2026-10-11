@@ -19,11 +19,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.phototidy.R
 import com.phototidy.core.model.MediaAlbum
 import com.phototidy.ui.components.photosLabel
 import com.phototidy.ui.theme.BottomSheetShape
@@ -50,6 +56,12 @@ fun AlbumQuickMoveBar(
         modifier = modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.padding(top = 12.dp, bottom = 10.dp)) {
+            // 标签重名时补一行路径（见 [AlbumMoveTarget.showPath]）：
+            // ROM 会把 DCIM/Camera 的桶名本地化成「相机」，设备上若真有个 DCIM/相机，
+            // 两张卡就长得一模一样 —— 用户没法知道点下去是哪个目录。
+            val collidingNames = remember(albums) {
+                albums.groupingBy { it.name }.eachCount().filterValues { it > 1 }.keys
+            }
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -62,6 +74,7 @@ fun AlbumQuickMoveBar(
                     AlbumMoveTarget(
                         album = album,
                         enabled = enabled,
+                        showPath = album.name in collidingNames,
                         onClick = { onMove(album) },
                     )
                 }
@@ -74,14 +87,28 @@ fun AlbumQuickMoveBar(
 private fun AlbumMoveTarget(
     album: MediaAlbum,
     enabled: Boolean,
+    /** 标签在本条列表里重名：补一行目录路径，否则两张卡完全一样，无法判断点的是哪个目录。 */
+    showPath: Boolean,
     onClick: () -> Unit,
 ) {
+    val folder = album.relativePath.trim('/')
+    // 卡片是 72dp 见方，路径只能截断显示 —— 但开头就是区分点（DCIM/C… 与 DCIM/相…），
+    // 够用了。无障碍则把完整路径读出来。
+    val described = stringResource(R.string.cd_move_target_folder, album.name, folder)
     Surface(
         onClick = onClick,
         enabled = enabled,
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = Modifier.width(72.dp),
+        modifier = Modifier
+            .width(72.dp)
+            .then(
+                if (showPath) {
+                    Modifier.semantics { contentDescription = described }
+                } else {
+                    Modifier
+                },
+            ),
     ) {
         Column(
             modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
@@ -108,6 +135,16 @@ private fun AlbumMoveTarget(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (showPath) {
+                Text(
+                    text = folder,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 9.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             if (album.count > 0) {
                 Text(
                     text = photosLabel(album.count),

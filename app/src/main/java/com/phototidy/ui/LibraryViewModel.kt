@@ -14,6 +14,7 @@ import com.phototidy.core.media.MediaStoreRepository
 import com.phototidy.core.media.SessionStore
 import com.phototidy.core.media.StagingTrash
 import com.phototidy.core.media.isImageDestinationLegal
+import com.phototidy.core.media.standardDirsMissing
 import com.phototidy.core.model.MediaAlbum
 import com.phototidy.core.model.MediaImage
 import com.phototidy.core.model.MediaScope
@@ -267,6 +268,8 @@ class LibraryViewModel(
         val fromDevice = existing.filter { it.bucketId != excludeBucket }
 
         // 补上系统标准目录，即使用户还没有照片放进去，也允许把照片归到这些位置。
+        // 去重**按路径**（见 standardDirsMissing）：按名字去重会让同名的真实目录把标准目录挤掉，
+        // 结果是一个合法落点反而选不到。标签重名的展示问题由 AlbumQuickMoveBar 补路径解决。
         // bucketId 落在 Int32 表示范围之外的哨兵区间：真实 BUCKET_ID 本质是 int32 的
         // 路径哈希，完全可能为负 —— 任何按名字算出来的负 id 都有概率与真实相册撞车，
         // 撞上会让快捷移动条（LazyRow 按 bucketId 做 key）直接因 key 重复而崩溃。
@@ -275,8 +278,7 @@ class LibraryViewModel(
             res.getString(R.string.album_screenshots) to "Pictures/Screenshots",
             res.getString(R.string.album_downloads) to "Pictures/Downloads",
         )
-        val missing = standard
-            .filterNot { (name, _) -> fromDevice.any { it.name == name } }
+        val missing = standardDirsMissing(fromDevice, standard)
             .mapIndexed { index, (name, path) ->
                 MediaAlbum(
                     bucketId = SYNTHETIC_BUCKET_BASE + index,

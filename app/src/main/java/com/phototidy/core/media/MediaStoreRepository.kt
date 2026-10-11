@@ -295,7 +295,10 @@ class MediaStoreRepository(
                     ).intentSender,
                     kind = ConsentKind.Trash,
                 )
-            }.getOrElse { MediaOpResult.Failed(it.message ?: strings.get(R.string.media_op_trash_request_failed)) }
+            }.getOrElse {
+                Log.w(TAG, "trash request failed", it)
+                MediaOpResult.Failed(strings.get(R.string.media_op_trash_request_failed))
+            }
         }
     }
 
@@ -329,7 +332,10 @@ class MediaStoreRepository(
                     ).intentSender,
                     kind = ConsentKind.Trash,
                 )
-            }.getOrElse { MediaOpResult.Failed(it.message ?: strings.get(R.string.media_op_trash_request_failed)) }
+            }.getOrElse {
+                Log.w(TAG, "restore request failed", it)
+                MediaOpResult.Failed(strings.get(R.string.media_op_trash_request_failed))
+            }
         }
     }
 
@@ -352,7 +358,10 @@ class MediaStoreRepository(
                     ).intentSender,
                     kind = ConsentKind.Delete,
                 )
-            }.getOrElse { MediaOpResult.Failed(it.message ?: strings.get(R.string.media_op_delete_request_failed)) }
+            }.getOrElse {
+                Log.w(TAG, "delete request failed", it)
+                MediaOpResult.Failed(strings.get(R.string.media_op_delete_request_failed))
+            }
         }
     }
 
@@ -637,4 +646,21 @@ fun computeTargetPath(album: MediaAlbum): String {
     if (isImageDestinationLegal(existing)) return "$existing/"
     val name = album.name.trim().trim('/')
     return if (name.isBlank()) "$IMAGE_ROOT/" else "$IMAGE_ROOT/$name/"
+}
+
+/**
+ * 从「系统标准目录」里挑出设备相册中还没有的那些，**按路径**判断，不看名字。
+ *
+ * 这里曾经按名字判断（`existing.any { it.name == name }`）。名字只是系统给桶的**显示名**：
+ * 它会随系统语言变，也会与另一个真实目录重名 —— 设备上只要存在一个叫「相机」的相册，
+ * 合成的「相机 → `DCIM/Camera`」就被跳过，于是**真正的 DCIM/Camera 反而选不到**
+ * （旧版本留下的 `DCIM/相机` 就会触发这种遮蔽）。
+ * 目录的唯一身份是路径，名字不是。
+ */
+internal fun standardDirsMissing(
+    existing: List<MediaAlbum>,
+    standard: List<Pair<String, String>>,
+): List<Pair<String, String>> {
+    val taken = existing.map { it.relativePath.trim('/').lowercase() }.toSet()
+    return standard.filterNot { (_, path) -> path.trim('/').lowercase() in taken }
 }

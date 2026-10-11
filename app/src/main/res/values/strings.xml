@@ -184,6 +184,9 @@
 
     <!-- ============================================================ 手势卡片 -->
     <string name="cd_current_photo">待整理的照片</string>
+    <!-- 移动目标标签重名时（bucket 显示名撞车，例如 ROM 把 DCIM/Camera 叫「相机」，
+         设备上又真有个 DCIM/相机）：把这行读出来，否则两张卡在无障碍下也无法区分 -->
+    <string name="cd_move_target_folder">%1$s，文件夹 %2$s</string>
     <string name="stamp_keep">保留 · 下一张</string>
     <string name="stamp_trash">移到回收站</string>
     <string name="stamp_undo">撤销上一个动作</string>
