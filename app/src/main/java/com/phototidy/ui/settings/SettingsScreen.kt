@@ -34,7 +34,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -215,15 +214,14 @@ fun SettingsScreen(
                 // 拖动期间只更新本地草稿：SettingsStore.update 每次提交都会把全部设置键
                 // 重新落盘（SharedPreferences 全量写），逐帧提交等于拖一次滑杆写几十次盘。
                 // 实时预览由 draft 驱动，松手（onValueChangeFinished）才真正提交一次。
-                // 草稿用 rememberSaveable：拖到一半进程被回收，恢复的是最后的取值
-                // 而不是静默退回旧值。
-                var sensitivityDraft by rememberSaveable {
+                //
+                // 草稿用 rememberSaveable 并把店值作为 inputs，恰好是需要的两条规则：
+                //  · 进程回收后重建 —— inputs 未变，沿用存档里的最后取值
+                //    （⚠️ 不能用 LaunchedEffect 把店值灌回草稿：它在首帧必跑一次，
+                //    会把刚还原的未提交取值立刻覆盖掉，等于白存）；
+                //  · 店值被外部改动 —— inputs 变化，草稿重新初始化为新店值。
+                var sensitivityDraft by rememberSaveable(settings.swipeSensitivity) {
                     mutableFloatStateOf(settings.swipeSensitivity)
-                }
-                LaunchedEffect(settings.swipeSensitivity) {
-                    // 店值被外部改动时回灌草稿（拖动本身不改店值，不会打断拖动；
-                    // 首次组合时是同值空操作）
-                    sensitivityDraft = settings.swipeSensitivity
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(

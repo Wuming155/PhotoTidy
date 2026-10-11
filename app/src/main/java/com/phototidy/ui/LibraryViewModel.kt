@@ -120,36 +120,44 @@ class LibraryViewModel(
         if (!_state.value.canRead) return
         viewModelScope.launch {
             _state.update { it.copy(loading = true) }
-            // 概览（全表扫描）、回收站计数、回收站首页三路查询互不依赖，并行取：
-            // 大库上刷新耗时从「三者之和」收敛为「最慢的一个」。
-            // runCatching 换成不吞取消的变体：取消是流程控制不是失败，
-            // 吞掉会让「刷新被取消」冒充成「读取失败」弹给用户。
-            val overviewDeferred = async { runCatchingUnlessCancelled { repo.loadOverview() } }
-            val trashCountDeferred = async { runCatchingUnlessCancelled { repo.countTrashed() } }
-            val firstPageDeferred = async { runCatchingUnlessCancelled { repo.pageTrashed(0, TRASH_PAGE_SIZE) } }
+            try {
+                // 概览（全表扫描）、回收站计数、回收站首页三路查询互不依赖，并行取：
+                // 大库上刷新耗时从「三者之和」收敛为「最慢的一个」。
+                // runCatching 换成不吞取消的变体：取消是流程控制不是失败，
+                // 吞掉会让「刷新被取消」冒充成「读取失败」弹给用户。
+                val overviewDeferred = async { runCatchingUnlessCancelled { repo.loadOverview() } }
+                val trashCountDeferred = async { runCatchingUnlessCancelled { repo.countTrashed() } }
+                val firstPageDeferred =
+                    async { runCatchingUnlessCancelled { repo.pageTrashed(0, TRASH_PAGE_SIZE) } }
 
-            val overview = overviewDeferred.await()
-                .onFailure {
-                    // 必须说出来。以前这里只往一个没人读的字段里塞文案，
-                    // 结果扫描失败对用户完全静默 —— 看起来就像「照片全没了」。
-                    // 旧状态（overview）保持不变，所以失败不会把已有内容清空。
-                    _state.update { state -> state.copy(loading = false) }
-                    ops.emit(res.getString(R.string.library_load_failed))
+                val overview = overviewDeferred.await()
+                    .onFailure {
+                        // 必须说出来。以前这里只往一个没人读的字段里塞文案，
+                        // 结果扫描失败对用户完全静默 —— 看起来就像「照片全没了」。
+                        // 旧状态（overview）保持不变，所以失败不会把已有内容清空。
+                        _state.update { state -> state.copy(loading = false) }
+                        ops.emit(res.getString(R.string.library_load_failed))
+                    }
+                    .getOrNull() ?: return@launch
+
+                val trashCount = trashCountDeferred.await().getOrDefault(0)
+                val firstPage = firstPageDeferred.await().getOrDefault(emptyList())
+
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        overview = overview,
+                        trash = firstPage,
+                        trashCount = trashCount,
+                    )
                 }
-                .getOrNull() ?: return@launch
-
-            val trashCount = trashCountDeferred.await().getOrDefault(0)
-            val firstPage = firstPageDeferred.await().getOrDefault(emptyList())
-
-            _state.update {
-                it.copy(
-                    loading = false,
-                    overview = overview,
-                    trash = firstPage,
-                    trashCount = trashCount,
-                )
+                restoreSessionOnce()
+            } finally {
+                // 取消路径（runCatchingUnlessCancelled 不再吞 CancellationException）
+                // 也必须把 loading 复位。当前取消等价于 VM 销毁、复位无人可见；
+                // 这层兜的是将来 refresh 被挪进更窄作用域/加防抖时的「永久转圈」。
+                _state.update { it.copy(loading = false) }
             }
-            restoreSessionOnce()
         }
     }
 

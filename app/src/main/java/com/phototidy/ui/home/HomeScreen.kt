@@ -167,6 +167,8 @@ fun HomeScreen(
                     modifier = Modifier.padding(start = 20.dp, end = 12.dp, top = 10.dp),
                 )
             }
+            // bucketId 在这里天然唯一：列表来自 loadOverview 的 HashMap 聚合，
+            // 不含「系统标准目录」的合成相册，不需要快捷移动条那样的组合 key
             items(items = folders.take(6), key = { it.bucketId }) { album ->
                 AlbumRow(
                     album = album,

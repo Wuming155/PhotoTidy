@@ -127,6 +127,11 @@ class MediaOpCoordinatorTest {
         // SharedFlow(replay=0) 在无订阅者时 tryEmit 恒返回 true（值被丢弃）——
         // 拿它的返回值判定「没人订阅」的话，这里会永久悬挂且 gate 不释放。
         // 正确行为：按订阅数判定，立即按「未授权」收口。
+        //
+        // ⚠️ 只断言 failureMsg 钉不住这条：就算判据失效（协程挂死在等待上），
+        // runTest 的虚拟时钟也会立刻把 5 分钟兜底超时走完、产出同一条
+        // consent_denied 文案。所以必须同时断言「没有消耗任何虚拟时间」——
+        // 超时兜底一介入，currentTime 就会是 300_000 而不是 0。
         val ops = MediaOpCoordinator(strings)
         var failureMsg: String? = null
         ops.runStaged(
@@ -135,6 +140,7 @@ class MediaOpCoordinatorTest {
             consentBudget = 1,
         ) { MediaOpResult.NeedsConsent(stubIntentSender(), ConsentKind.Write) }
         assertEquals("res:${R.string.media_op_consent_denied}", failureMsg)
+        assertEquals("不应靠超时兜底收口", 0L, testScheduler.currentTime)
     }
 
     @Test
