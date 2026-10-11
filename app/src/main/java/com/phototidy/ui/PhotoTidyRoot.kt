@@ -273,6 +273,7 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                     val onMove = remember(reviewVm) { reviewVm::moveTo }
                     val onRestart = remember(reviewVm) { reviewVm::restart }
                     val onDefer = remember(reviewVm) { reviewVm::deferCurrent }
+                    val onRetryLoad = remember(reviewVm) { reviewVm::retryLoad }
                     val onCloseReview = remember { { scopeEncoded = "" } }
                     val onOpenHelp = remember { { helpVisible = true } }
                     val onPickScope = remember { { scope: MediaScope -> openScope(scope) } }
@@ -294,6 +295,7 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                         onPickScope = onPickScope,
                         onRestart = onRestart,
                         onDefer = onDefer,
+                        onRetryLoad = onRetryLoad,
                         modifier = Modifier.fillMaxSize(),
                     )
 

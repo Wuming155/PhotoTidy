@@ -20,6 +20,7 @@ import com.phototidy.core.model.MediaScope
 import com.phototidy.core.model.PendingMove
 import com.phototidy.core.model.ReviewAction
 import com.phototidy.core.model.ReviewRecord
+import com.phototidy.util.runCatchingUnlessCancelled
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,7 +47,19 @@ data class ReviewUiState(
     val submittingLabel: String = "",
     /** 本次会话的改动已经提交到系统相册 */
     val committed: Boolean = false,
+    /**
+     * 这一页照片没能读出来。
+     *
+     * 必须与「整理完了」严格区分：两者在界面上都是「没有当前照片」，
+     * 但一个意味着「没事干了」，另一个意味着「有照片却读不到」。
+     * 把它们混为一谈，一次查询失败就会被渲染成「这一轮整理完了」——
+     * 用户看着照片库里的照片，被告知已经整理完，这就是应用在说谎。
+     */
+    val loadError: Boolean = false,
 ) {
+    /** 读取失败、手上也没有可操作的照片：界面该给的是「重试」，不是转圈更不是「完成」。 */
+    val windowUnavailable: Boolean get() = loadError && current == null
+
     val progress: Float
         get() = if (total == 0) 0f else (processed.toFloat() / total).coerceIn(0f, 1f)
 
@@ -240,6 +253,8 @@ class ReviewViewModel(
         history.clear()
         processedCount = 0
         keptCount = 0
+        // 上一轮的读取失败不该把新一轮也堵在错误卡片上：这是用户主动重开的读取
+        _state.update { it.copy(loadError = false) }
         syncState()
     }
 
@@ -361,8 +376,15 @@ class ReviewViewModel(
      *
      * 这是**唯一**会读取照片的地方；用户滑动时它并行跑在后台，
      * 所以「翻到第 8 万张」不会出现明显停顿。
+     *
+     * ⚠️ 读取失败**不是**「数据源到头了」。这里以前是 `getOrDefault(emptyList())`：
+     * 异常被吞成一张空页，紧接着落进「取不满一页 = 已耗尽」的分支，于是一次查询失败
+     * 就被渲染成「这一轮整理完了」——而照片库里一张都没少，用户看到的是应用在说谎。
+     * 现在失败进 [ReviewUiState.loadError]，界面给的是「读取失败 + 重试」。
      */
     private fun ensureWindow() {
+        // 上一次读取已经失败：等用户显式重试（[retryLoad]），不要每次 syncState 都重撞一次
+        if (_state.value.loadError) return
         if (loadingPage || loadedThrough >= totalCount) return
         if (window.size >= REFILL_BELOW) return
 
@@ -370,9 +392,22 @@ class ReviewViewModel(
         val requestOffset = loadedThrough
         val requestGeneration = generation
         viewModelScope.launch {
-            val page = runCatching { loader(requestOffset, PAGE_SIZE) }.getOrDefault(emptyList())
+            // 取消不是失败，不能冒充成「读取失败」弹给用户
+            val page = runCatchingUnlessCancelled { loader(requestOffset, PAGE_SIZE) }.getOrNull()
             if (requestGeneration != generation) return@launch
             loadingPage = false
+
+            // 两条失败判据：
+            //  · 查询抛异常（page == null）；
+            //  · 概览说有 totalCount 张，第一页却一张都取不到 —— 计数与取数口径不一致，
+            //    属于读取出了问题，而不是「这个范围是空的」。静默收成「完成」会让用户
+            //    以为照片都整理完了（真实案例：按月筛选的参数类型不对，SQL 永远匹配 0 行）。
+            val firstPageEmpty = page?.isEmpty() == true && requestOffset == 0 && totalCount > 0
+            if (page == null || firstPageEmpty) {
+                syncWindow(loadError = true)
+                return@launch
+            }
+
             if (page.size < PAGE_SIZE) {
                 // 取不满一页 = 数据源到头了（或权限范围缩小了）。标记耗尽，别再反复请求。
                 loadedThrough = totalCount
@@ -380,33 +415,49 @@ class ReviewViewModel(
                 loadedThrough += page.size
             }
             window.addAll(page)
-            syncWindow()
+            syncWindow(loadError = false)
         }
     }
 
+    /**
+     * 读取失败后的重试入口。
+     *
+     * 只清错误标记再走一次 [syncState]：`loadedThrough` 在失败路径上从未被推进，
+     * 所以重试会**原地**重取失败的那一页，不会把用户已经滑过的照片再放回队列。
+     */
+    fun retryLoad() {
+        if (loadingPage) return
+        _state.update { it.copy(loadError = false) }
+        syncState()
+    }
+
     /** 只更新与窗口相关的字段，不动计数器。 */
-    private fun syncWindow() {
-        val remaining = remainingCount()
+    private fun syncWindow(loadError: Boolean) {
         _state.update {
+            val remaining = remainingCount()
             it.copy(
                 current = at(0),
                 next = at(1),
                 finished = remaining == 0,
-                preparing = at(0) == null && remaining > 0,
+                // 读取失败时不能转圈：转圈在这块版面上等价于「正在整理」，而实际什么都没在发生
+                preparing = !loadError && at(0) == null && remaining > 0,
+                loadError = loadError,
             )
         }
     }
 
     private fun syncState() {
         _state.update {
+            val remaining = remainingCount()
+            val blocked = it.loadError && at(0) == null
             it.copy(
                 processed = processedCount,
                 current = at(0),
                 next = at(1),
                 pendingMoveCount = pendingMoves.size,
                 canUndo = history.isNotEmpty(),
-                finished = remainingCount() == 0,
-                preparing = at(0) == null && remainingCount() > 0,
+                finished = remaining == 0,
+                preparing = !blocked && at(0) == null && remaining > 0,
                 keptCount = keptCount,
                 // 「已经产生过非保留改动、且全部结算完」——用计数器判断，不再遍历历史
                 committed = it.committed || (pendingMoves.isEmpty() &&

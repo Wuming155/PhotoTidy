@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.SkipNext
@@ -133,6 +134,7 @@ fun ReviewScreen(
     onPickScope: (MediaScope) -> Unit,
     onRestart: () -> Unit,
     onDefer: () -> Unit,
+    onRetryLoad: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var scopePickerOpen by remember { mutableStateOf(false) }
@@ -307,6 +309,10 @@ fun ReviewScreen(
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(strokeWidth = 2.dp)
                     }
+                } else if (state.windowUnavailable) {
+                    // 照片读不出来时必须说清楚，并给一条重试的路。
+                    // 这里以前直接落进「已结束」分支 —— 于是查询失败会长得和「整理完了」一模一样。
+                    LoadErrorCard(onRetry = onRetryLoad, onClose = onClose)
                 } else {
                     AnimatedContent(
                         targetState = state.finished,
@@ -341,11 +347,14 @@ fun ReviewScreen(
                 }
             }
 
-            // ------------------------------------------- 手势提示 / 排队状态
-            // 结束态没有「当前这张」可滑，手势提示就是句空话；快捷移动条同理（没有可投递的对象，
-            // 它整条是禁用的）。这两块加起来约 140dp，正是把完成卡片挤到塞不下的主因 ——
+            // 「能对当前这张做决定」= 还有照片可滑，且不是因为读不出来而没有。
+            // 结束态与读取失败态都没有可操作的对象：手势提示是句空话、快捷移动条是死控件
+            // （没有可投递的载体）。这两块加起来约 140dp，正是把完成卡片挤到塞不下的主因 ——
             // 死控件让位给真正要看的结算信息。
-            if (!state.finished) {
+            val canDecide = !state.finished && !state.windowUnavailable
+
+            // ------------------------------------------- 手势提示 / 排队状态
+            if (canDecide) {
                 Text(
                     text = stringResource(R.string.review_hint),
                     style = MaterialTheme.typography.labelSmall,
@@ -377,14 +386,14 @@ fun ReviewScreen(
             // ---------------------------------------------------------- 动作条
             ReviewActionBar(
                 canUndo = state.canUndo,
-                finished = state.finished,
+                decisionsEnabled = canDecide,
                 busy = state.preparing,
                 onUndo = onUndo,
                 onKeep = onKeep,
                 onTrash = onTrash,
             )
 
-            if (!state.finished) {
+            if (canDecide) {
                 Spacer(Modifier.height(8.dp))
 
                 // -------------------------------------------------------- 快捷移动
@@ -598,18 +607,19 @@ private fun ReviewProgress(state: ReviewUiState) {
 @Composable
 private fun ReviewActionBar(
     canUndo: Boolean,
-    finished: Boolean,
+    decisionsEnabled: Boolean,
     busy: Boolean,
     onUndo: () -> Unit,
     onKeep: () -> Unit,
     onTrash: () -> Unit,
 ) {
-    // 撤销的门控刻意**不看** `finished`：把最后一张也处理掉、队列滑空之后，
+    // 撤销的门控刻意**不看**「还有没有可决定的照片」：把最后一张也处理掉、队列滑空之后，
     // 用户的改动还全在内存里等着提交，这时候不给他退路是说不通的
-    // （「全部清掉、还没提交」正是最需要反悔的那一刻）。
-    // 保留 / 清除则相反 —— 队列空了就没有作用对象了。
+    // （「全部清掉、还没提交」正是最需要反悔的那一刻）。读取失败时同理 ——
+    // 那几张已经决定过的照片还在队列里，重试之前也该能反悔。
+    // 保留 / 清除则相反 —— 没有可决定的对象了就没有作用对象。
     val undoEnabled = canUndo && !busy
-    val decideEnabled = !finished && !busy
+    val decideEnabled = decisionsEnabled && !busy
 
     Row(
         modifier = Modifier
@@ -774,6 +784,71 @@ private fun FinishedCard(
                     }
                     FilledTonalButton(onClick = onRestart, shape = MaterialTheme.shapes.extraLarge) {
                         Text(stringResource(R.string.action_restart))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 「这一批照片读不出来」。
+ *
+ * 刻意**不**长得像 [FinishedCard]：两者在数据上都表现为「没有当前照片」，
+ * 但一个意味着「没事干了」，另一个意味着「有照片却读不到」。长得一样，
+ * 就等于告诉用户「已经整理完了」—— 而那正是这次踩到的坑。
+ */
+@Composable
+private fun LoadErrorCard(
+    onRetry: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.errorContainer,
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(28.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.error) {
+                    Box(modifier = Modifier.size(80.dp), contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.ErrorOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onError,
+                            modifier = Modifier.size(38.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+                Text(
+                    text = stringResource(R.string.review_load_error_title),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.review_load_error_desc),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(24.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = onClose, shape = MaterialTheme.shapes.extraLarge) {
+                        Text(stringResource(R.string.action_back_home))
+                    }
+                    FilledTonalButton(onClick = onRetry, shape = MaterialTheme.shapes.extraLarge) {
+                        Text(stringResource(R.string.action_retry))
                     }
                 }
             }

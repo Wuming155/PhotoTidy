@@ -374,6 +374,15 @@ class MediaStoreRepository(
      * 系统并不保证每张照片都写了 `DATE_TAKEN`（截图、第三方应用存的图常常没有），
      * 缺失时退化用入库时间 —— 这与展示层 `MediaImage.takenAtMillis` 的取值口径必须完全一致，
      * 否则「按月份整理」会漏照片。
+     *
+     * ⚠️ 月份区间的两个参数**必须** `CAST(? AS INTEGER)`。
+     * `ContentResolver.query` 的 `selectionArgs` 是 `String[]`，SQLite 侧一律以 **TEXT**
+     * 存储类绑定。而区间左端是 `COALESCE(...)` 表达式，**没有列亲和性**：
+     * 两个操作数都没有亲和性时 SQLite 按存储类比较，而它的次序是
+     * `NULL < INTEGER/REAL < TEXT < BLOB` —— 于是一整列 INTEGER 毫秒值永远 `>= '1790784000000'`
+     * 为假，**月份范围永远匹配 0 行**（相册条件不受影响：`BUCKET_ID` 是有 INTEGER 亲和性的列，
+     * TEXT 参数会被转成数字）。
+     * 显式 `CAST` 把参数落成 INTEGER 值，比较才是数值比较。
      */
     private fun MediaScope.filter(): Pair<String, Array<String>?> = when (this) {
         MediaScope.Recent -> VISIBLE to null
@@ -387,7 +396,7 @@ class MediaStoreRepository(
                 .toInstant().toEpochMilli()
             val end = YearMonth.of(year, month).plusMonths(1).atDay(1).atStartOfDay(zone)
                 .toInstant().toEpochMilli()
-            "$VISIBLE AND $EFFECTIVE_DATE >= ? AND $EFFECTIVE_DATE < ?" to
+            "$VISIBLE AND $EFFECTIVE_DATE >= CAST(? AS INTEGER) AND $EFFECTIVE_DATE < CAST(? AS INTEGER)" to
                 arrayOf(start.toString(), end.toString())
         }
     }

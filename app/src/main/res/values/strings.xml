@@ -155,6 +155,11 @@
     <string name="action_back_home">返回首页</string>
     <string name="action_restart">再来一轮</string>
 
+    <!-- 读取失败必须与「整理完了」分开说：把失败渲染成完成，等于告诉用户照片都处理过了 -->
+    <string name="review_load_error_title">这批照片没能读出来</string>
+    <string name="review_load_error_desc">可以重试。如果一直失败，回首页点一次重新扫描再进来。</string>
+    <string name="action_retry">重试</string>
+
     <string name="action_undo">撤销</string>
     <string name="action_keep">保留</string>
     <string name="action_clear">清除</string>
