@@ -8,6 +8,7 @@ import com.phototidy.core.ResourcesStringProvider
 import com.phototidy.core.media.MediaOpCoordinator
 import com.phototidy.core.media.MediaStoreRepository
 import com.phototidy.core.media.RealSessionStore
+import com.phototidy.core.media.ReviewedLedger
 import com.phototidy.core.media.SessionStore
 import com.phototidy.core.media.StagingTrash
 import com.phototidy.core.settings.SettingsStore
@@ -39,6 +40,14 @@ object Graph {
     val stagingTrash: StagingTrash by lazy { StagingTrash() }
 
     val sessionStore: SessionStore by lazy { RealSessionStore(appContext) }
+
+    /**
+     * 「已整理」账本。
+     *
+     * 必须在概览扫描（[repository]）与整理会话（ReviewViewModel）之间共享同一份实例 ——
+     * 否则「刚整理完一张」不会立刻反映到首页数字上。
+     */
+    val reviewedLedger: ReviewedLedger by lazy { ReviewedLedger(sessionStore) }
 
     val mediaOps: MediaOpCoordinator by lazy { MediaOpCoordinator(stringProvider) }
 

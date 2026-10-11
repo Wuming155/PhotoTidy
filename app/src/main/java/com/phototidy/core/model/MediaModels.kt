@@ -46,6 +46,14 @@ data class MediaAlbum(
     val relativePath: String,
     val count: Int,
     val cover: MediaImage?,
+    /**
+     * 还没整理过的张数。
+     *
+     * 展示口径以它为准、[count] 降为副信息 —— 与参考实现一致：用户要看的是
+     * 「还剩多少要整理」，而不是「这个相册一共多大」。
+     * 合成相册（系统标准目录）拿不到真实统计，保持与 [count] 同步即可。
+     */
+    val remaining: Int = count,
 ) {
     val canReceive: Boolean get() = relativePath.isNotBlank()
 
@@ -73,6 +81,8 @@ data class MonthGroup(
     val month: Int,
     val count: Int,
     val cover: MediaImage?,
+    /** 还没整理过的张数，展示口径以它为准（见 [MediaAlbum.remaining]）。 */
+    val remaining: Int = count,
 )
 
 /**

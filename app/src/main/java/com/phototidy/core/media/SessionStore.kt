@@ -33,6 +33,18 @@ interface SessionStore {
     fun savePendingMoves(scopeKey: String, moves: List<PendingMove>)
     fun loadPendingMoves(scopeKey: String): List<PendingMove>
     fun clearPendingMoves(scopeKey: String)
+
+    /**
+     * 「已整理」账本。
+     *
+     * 与前两组不同，这里存的是**事实**而不是意图：这张照片用户已经做过决定
+     * （保留 / 移动 / 回收站），下次不该再排进整理队列。
+     *
+     * 它必须跨进程存活 —— 「保留」是唯一不改变照片库的动作，一旦丢了这条账，
+     * 用户整理过的那几百张会原封不动地重新出现，等于白干。
+     */
+    fun saveReviewed(imageIds: List<Long>)
+    fun loadReviewed(): List<Long>
 }
 
 /** 基于应用私有 `SharedPreferences` 的生产实现。 */
@@ -94,6 +106,14 @@ class RealSessionStore(context: Context) : SessionStore {
         prefs.edit().remove(pendingKey(scopeKey)).apply()
     }
 
+    // ----------------------------------------------------------- 已整理账本（全局）
+
+    override fun saveReviewed(imageIds: List<Long>) {
+        prefs.edit().putString(KEY_REVIEWED, JSONArray(imageIds).toString()).apply()
+    }
+
+    override fun loadReviewed(): List<Long> = readIdArray(prefs.getString(KEY_REVIEWED, null))
+
     // ------------------------------------------------------------------ 内部
 
     private fun pendingKey(scopeKey: String) = "$PREFIX_PENDING$scopeKey"
@@ -108,6 +128,7 @@ class RealSessionStore(context: Context) : SessionStore {
 
     private companion object {
         const val KEY_STAGING = "staging_ids"
+        const val KEY_REVIEWED = "reviewed_ids"
         const val PREFIX_PENDING = "pending_moves:"
     }
 }

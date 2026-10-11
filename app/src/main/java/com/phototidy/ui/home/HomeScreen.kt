@@ -49,6 +49,8 @@ import com.phototidy.ui.components.LibraryImage
 import com.phototidy.ui.components.SectionHeader
 import com.phototidy.ui.components.TinyBadge
 import com.phototidy.ui.components.photosLabel
+import com.phototidy.ui.components.remainingCompactLabel
+import com.phototidy.ui.components.remainingLabel
 import com.phototidy.ui.theme.PhotoCardShape
 import com.phototidy.util.toReadableSize
 
@@ -69,8 +71,14 @@ fun HomeScreen(
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
-    val countLabel = photosLabel(state.totalCount)
     val sizeLabel = state.totalBytes.toReadableSize()
+    // 主数字是「还剩多少要整理」。全都整理完了才退回去报总数，否则屏幕上会出现
+    // 一个恒为 0 的数字，看起来像照片丢了。
+    val countLabel = if (state.remainingTotal > 0) {
+        remainingLabel(state.remainingTotal)
+    } else {
+        photosLabel(state.totalCount)
+    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -92,10 +100,16 @@ fun HomeScreen(
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
-                        text = if (state.totalCount == 0) {
-                            stringResource(R.string.home_subtitle_empty)
-                        } else {
-                            stringResource(R.string.home_subtitle, countLabel, sizeLabel)
+                        text = when {
+                            state.totalCount == 0 -> stringResource(R.string.home_subtitle_empty)
+                            state.remainingTotal == 0 ->
+                                stringResource(R.string.home_subtitle_done, sizeLabel)
+
+                            else -> stringResource(
+                                R.string.home_subtitle_remaining,
+                                remainingLabel(state.remainingTotal),
+                                sizeLabel,
+                            )
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -123,6 +137,11 @@ fun HomeScreen(
             HeroCard(
                 cover = state.newest,
                 countLabel = countLabel,
+                // 徽标只在真的「整理过一些」时才说「继续整理」——以前它是写死的，
+                // 全新安装也会显示「继续整理」，与首屏的事实不符。
+                badgeLabel = stringResource(
+                    if (state.reviewedCount > 0) R.string.home_hero_badge else R.string.home_hero_action,
+                ),
                 onClick = { onOpenScope(MediaScope.Recent) },
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
@@ -209,6 +228,7 @@ fun HomeScreen(
 private fun HeroCard(
     cover: MediaImage?,
     countLabel: String,
+    badgeLabel: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -276,7 +296,7 @@ private fun HeroCard(
                         .padding(20.dp),
                 ) {
                     TinyBadge(
-                        text = stringResource(R.string.home_hero_badge),
+                        text = badgeLabel,
                         container = Color.White.copy(alpha = 0.22f),
                         content = Color.White,
                     )
@@ -329,10 +349,16 @@ private fun MonthCard(month: MonthGroup, onClick: () -> Unit) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // 瓦片很窄，用紧凑写法；但口径保持一致 —— 一律「剩 N / M」，
+                // 绝不在这里退回「N 张」这种看不出口径的写法。
                 Text(
-                    text = photosLabel(month.count),
+                    text = remainingCompactLabel(month.remaining, month.count),
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (month.remaining == 0) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                 )
             }
         }

@@ -17,6 +17,27 @@ import com.phototidy.core.model.MediaScope
 fun photosLabel(count: Int): String =
     pluralStringResource(R.plurals.photo_count, count, count)
 
+/**
+ * 「剩 N 张」—— 全应用的主数字口径。
+ *
+ * 与 [photosLabel]（「N 张」）刻意分开：把「一共有多少」和「还剩多少要整理」
+ * 混用同一个词，正是这次被用户抓到的那个坑 —— 滑完 4 张返回首页，数字还是「15 张」，
+ * 看起来像没生效，其实是它答的是另一个问题。
+ */
+@Composable
+fun remainingLabel(remaining: Int): String =
+    pluralStringResource(R.plurals.photo_remaining, remaining, remaining)
+
+/** 「剩 N / M」，给空间紧张的瓦片用。 */
+@Composable
+fun remainingCompactLabel(remaining: Int, total: Int): String =
+    pluralStringResource(R.plurals.photo_remaining_compact, remaining, remaining, total)
+
+/** 「剩 N 张 · 共 M 张」，给有整行空间的列表用。 */
+@Composable
+fun remainingOfTotalLabel(remaining: Int, total: Int): String =
+    pluralStringResource(R.plurals.photo_remaining_of_total, remaining, remaining, total)
+
 @Composable
 fun selectedLabel(count: Int): String =
     pluralStringResource(R.plurals.selected_count, count, count)

@@ -19,6 +19,7 @@ import com.phototidy.core.model.MediaImage
 import com.phototidy.core.model.MediaScope
 import com.phototidy.core.model.PendingMove
 import com.phototidy.core.model.ReviewAction
+import com.phototidy.core.media.ReviewedLedger
 import com.phototidy.core.model.ReviewRecord
 import com.phototidy.util.runCatchingUnlessCancelled
 import kotlinx.coroutines.CancellationException
@@ -29,7 +30,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class ReviewUiState(
+    /** 待整理张数（进度条分母）。口径与参考实现一致：回答「还剩多少」，不是「一共有多少」。 */
     val total: Int = 0,
+    /** 这个范围一共多少张（含已经整理掉的），只用于「已整理 N 张」这类副信息。 */
+    val rawTotal: Int = 0,
     val processed: Int = 0,
     val current: MediaImage? = null,
     val next: MediaImage? = null,
@@ -59,6 +63,14 @@ data class ReviewUiState(
 ) {
     /** 读取失败、手上也没有可操作的照片：界面该给的是「重试」，不是转圈更不是「完成」。 */
     val windowUnavailable: Boolean get() = loadError && current == null
+
+    /**
+     * 这个范围里**已经整理过**的张数（进入会话时就已经整理掉的）。
+     *
+     * 「还剩 total 张没整理」+「已经整理掉 alreadyReviewed 张」才是这个范围的全貌，
+     * 只报一个数会让用户以为照片消失了（这也是这次踩到的坑）。
+     */
+    val alreadyReviewed: Int get() = (rawTotal - total).coerceAtLeast(0)
 
     val progress: Float
         get() = if (total == 0) 0f else (processed.toFloat() / total).coerceIn(0f, 1f)
@@ -120,12 +132,17 @@ class ReviewViewModel(
     private val session: SessionStore,
     private val strings: StringProvider,
     private val scope: MediaScope,
+    /** 这个范围里**一共**有多少张 —— 分页上界，不是进度条分母。 */
     totalCount: Int,
+    /** 这个范围里**还没整理**的有多少张 —— 进度条分母与「还剩多少」的数字。 */
+    remainingCount: Int,
     initialMoveTargets: List<MediaAlbum>,
     /** 按 offset/limit 从数据层取一页照片。 */
     private val loader: suspend (offset: Int, limit: Int) -> List<MediaImage>,
     /** 提交成功后回调，让外层重新扫描照片库（首页 / 相册 / 回收站的数据都变了）。 */
     private val onCommitted: () -> Unit = {},
+    /** 「已整理」账本：入队时跳过、决定时记账。 */
+    private val reviewed: ReviewedLedger,
 ) : ViewModel() {
 
     private val totalCount = totalCount
@@ -155,9 +172,19 @@ class ReviewViewModel(
     private var processedCount = 0
     private var keptCount = 0
 
+    /**
+     * 「再来一轮」：本次会话忽略账本，把这一范围的照片从头再放一遍。
+     *
+     * 刻意**不**去删账本里的记录 —— 重看一遍不等于「这些又变回没整理过」，
+     * 用户滑到一半退出去，再进来看到的仍应该是「已整理」的状态。
+     */
+    private var ignoreLedger = false
+
     private val _state = MutableStateFlow(
         ReviewUiState(
-            total = totalCount,
+            // 分母 = 待整理数（参考实现的口径：数字回答「还剩多少」，不是「一共有多少」）
+            total = remainingCount,
+            rawTotal = totalCount,
             moveTargets = initialMoveTargets,
             preparing = totalCount > 0,
         ),
@@ -174,10 +201,16 @@ class ReviewViewModel(
 
     // ------------------------------------------------------------ 主流程动作
 
-    /** ✔ 保留：什么都不做，只是看下一张。 */
+    /**
+     * ✔ 保留：不改动照片，但**记一条已整理的账**。
+     *
+     * 「保留」是唯一不改变照片库的动作，所以它必须留下账 —— 否则用户滑过的照片
+     * 下次会原封不动地重新排队，首页的数字也永远停在「一共有多少张」上。
+     */
     fun keep() {
         val image = advance() ?: return
         history.addLast(ReviewRecord(image, ReviewAction.Keep))
+        reviewed.mark(image.id)
         processedCount++
         keptCount++
         syncState()
@@ -191,6 +224,7 @@ class ReviewViewModel(
         val image = advance() ?: return
         staging.stage(image)
         history.addLast(ReviewRecord(image, ReviewAction.Trash))
+        reviewed.mark(image.id)
         processedCount++
         persist()
         syncState()
@@ -212,6 +246,7 @@ class ReviewViewModel(
             albumPath = album.relativePath,
         )
         history.addLast(ReviewRecord(image, ReviewAction.Move, targetAlbum = album.name))
+        reviewed.mark(image.id)
         processedCount++
         persist()
         syncState()
@@ -237,13 +272,22 @@ class ReviewViewModel(
         }
         processedCount--
 
+        // 「我反悔了」= 这张重新算未整理。账本必须一起回退：留在账本里的话，
+        // 它会既不在队列里、也不算待整理 —— 从用户视角看就是照片凭空消失了。
+        reviewed.unmark(last.image.id)
+
         // 放回窗口头部，用户看到的就是「刚才那张又回来了」
         window.addFirst(last.image)
         persist()
         syncState()
     }
 
-    /** 队列空了之后想再过一遍。已排队待提交的改动保留 —— 那是用户已经做出的决定。 */
+    /**
+     * 队列空了之后想再过一遍。已排队待提交的改动保留 —— 那是用户已经做出的决定。
+     *
+     * 这一轮**忽略账本**：把这一范围的照片全部重新排一遍（分母也回到「一共有多少张」）。
+     * 账本本身不动，所以滑到一半退出去、再进来，看到的仍是「已整理」的状态。
+     */
     fun restart() {
         generation++
         window.clear()
@@ -253,8 +297,9 @@ class ReviewViewModel(
         history.clear()
         processedCount = 0
         keptCount = 0
+        ignoreLedger = true
         // 上一轮的读取失败不该把新一轮也堵在错误卡片上：这是用户主动重开的读取
-        _state.update { it.copy(loadError = false) }
+        _state.update { it.copy(loadError = false, total = totalCount) }
         syncState()
     }
 
@@ -333,6 +378,9 @@ class ReviewViewModel(
                 //  · 重扫照片库，让首页/回收站反映真实状态。
                 session.savePendingMoves(scope.key, pendingMoves.values.toList())
                 session.saveStaging(staging.items.value.map { it.id })
+                // 「已整理」账本也在这里结清：提交是用户认为「这一轮办完了」的时刻，
+                // 不能还欠着没写盘（节流窗口内最多只会有十几条没落盘，但没理由不写）。
+                reviewed.flush()
                 _state.update { it.copy(submitting = false, submittingLabel = "") }
                 syncState()
                 onCommitted()
@@ -402,6 +450,7 @@ class ReviewViewModel(
             //  · 概览说有 totalCount 张，第一页却一张都取不到 —— 计数与取数口径不一致，
             //    属于读取出了问题，而不是「这个范围是空的」。静默收成「完成」会让用户
             //    以为照片都整理完了（真实案例：按月筛选的参数类型不对，SQL 永远匹配 0 行）。
+            // 判据必须看**原始页**：下面会把已整理的照片滤掉，滤空是正常的（范围已经整理完了）。
             val firstPageEmpty = page?.isEmpty() == true && requestOffset == 0 && totalCount > 0
             if (page == null || firstPageEmpty) {
                 syncWindow(loadError = true)
@@ -414,7 +463,20 @@ class ReviewViewModel(
             } else {
                 loadedThrough += page.size
             }
-            window.addAll(page)
+
+            // 已整理的照片不再进队列 —— 这是「已整理 / 未整理」在行为上的落点：
+            // 首页数字减下去不算数，用户再进来时必须真的看不到它们。
+            // 中途的 syncState() 会继续把窗口补满（一次补不全没关系，loadedThrough 在推进），
+            // 所以一页里混着大量已整理的照片也不会卡住。
+            window.addAll(if (ignoreLedger) page else page.filterNot { reviewed.contains(it.id) })
+
+            // 整页都是已整理的照片：窗口没长，但数据源还没到头 —— 立刻再补一页，
+            // 否则用户看到的是转圈（preparing）而不是「下一条待整理」。
+            if (window.size < REFILL_BELOW && loadedThrough < totalCount) {
+                syncWindow(loadError = false)
+                ensureWindow()
+                return@launch
+            }
             syncWindow(loadError = false)
         }
     }
@@ -509,6 +571,8 @@ class ReviewViewModel(
                 }
                 pendingMoves[move.imageId] = move
                 history.addLast(ReviewRecord(image, ReviewAction.Move, targetAlbum = move.albumName))
+                // 恢复出来的待移动项也是「已经决定过」的照片，账本要一起补齐
+                reviewed.mark(move.imageId)
                 processedCount++
             }
             if (unreachable > 0) {
@@ -569,7 +633,10 @@ class ReviewViewModel(
 
         fun factory(
             scope: MediaScope,
+            /** 范围内一共多少张（分页上界）。 */
             total: Int,
+            /** 范围内还没整理的有多少张（进度条分母）。 */
+            remaining: Int,
             moveTargets: List<MediaAlbum>,
             loader: suspend (offset: Int, limit: Int) -> List<MediaImage>,
             onCommitted: () -> Unit = {},
@@ -583,11 +650,19 @@ class ReviewViewModel(
                     strings = Graph.stringProvider,
                     scope = scope,
                     totalCount = total,
+                    remainingCount = remaining,
                     initialMoveTargets = moveTargets,
                     loader = loader,
                     onCommitted = onCommitted,
+                    reviewed = Graph.reviewedLedger,
                 )
             }
         }
+    }
+
+    override fun onCleared() {
+        // 应用被回收 / 会话结束：把欠着的「已整理」记录结清，别让节流窗口吞掉它们。
+        reviewed.flush()
+        super.onCleared()
     }
 }

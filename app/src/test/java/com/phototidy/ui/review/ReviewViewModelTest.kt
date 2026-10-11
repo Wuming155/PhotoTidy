@@ -4,6 +4,7 @@ import com.phototidy.core.StringProvider
 import com.phototidy.core.media.MediaOpCoordinator
 import com.phototidy.core.media.MediaOpResult
 import com.phototidy.core.media.MediaRepository
+import com.phototidy.core.media.ReviewedLedger
 import com.phototidy.core.media.SessionStore
 import com.phototidy.core.model.MediaImage
 import com.phototidy.core.model.PendingMove
@@ -43,6 +44,7 @@ class ReviewViewModelTest {
     private class FakeSessionStore : SessionStore {
         private val staging = mutableListOf<Long>()
         private val pending = mutableMapOf<String, List<PendingMove>>()
+        private val reviewed = mutableListOf<Long>()
         override fun saveStaging(imageIds: List<Long>) { staging.clear(); staging.addAll(imageIds) }
         override fun loadStaging(): List<Long> = staging.toList()
         override fun clearStaging() = staging.clear()
@@ -51,6 +53,10 @@ class ReviewViewModelTest {
         }
         override fun loadPendingMoves(scopeKey: String): List<PendingMove> = pending[scopeKey].orEmpty()
         override fun clearPendingMoves(scopeKey: String) { pending.remove(scopeKey) }
+        override fun saveReviewed(imageIds: List<Long>) {
+            reviewed.clear(); reviewed.addAll(imageIds)
+        }
+        override fun loadReviewed(): List<Long> = reviewed.toList()
     }
 
     private class FakeMediaRepository(
@@ -80,6 +86,9 @@ class ReviewViewModelTest {
         session: SessionStore = FakeSessionStore(),
         scope: MediaScope = MediaScope.Recent,
         totalCount: Int = 20,
+        /** 待整理数（进度条分母）。默认与总数相同 = 这个范围一张都还没整理过。 */
+        remaining: Int = totalCount,
+        reviewed: ReviewedLedger = ReviewedLedger(session),
         loaderImages: List<MediaImage> = (1L..20L).map { makeImage(it) },
         loader: (suspend (Int, Int) -> List<MediaImage>)? = null,
         onCommitted: () -> Unit = {},
@@ -91,9 +100,11 @@ class ReviewViewModelTest {
         val ops = MediaOpCoordinator(strings)
         return ReviewViewModel(
             repo = repo, staging = staging, ops = ops, session = session, strings = strings,
-            scope = scope, totalCount = totalCount, initialMoveTargets = emptyList(),
+            scope = scope, totalCount = totalCount, remainingCount = remaining,
+            initialMoveTargets = emptyList(),
             loader = loader ?: { _, _ -> loaderImages },
             onCommitted = onCommitted,
+            reviewed = reviewed,
         )
     }
 
@@ -258,6 +269,140 @@ class ReviewViewModelTest {
         assertEquals(200, vm.state.value.stagedCount)
         // 第一页 150 张 + 窗口剩余低于阈值时补的最后一页（50 < 150 → 到头）——恰好两次取数
         assertEquals(listOf(0 to 150, 150 to 150), calls)
+    }
+
+    // ------------------------------------------------------ 已整理 / 未整理
+
+    @Test
+    fun `keep is recorded in the ledger and survives a restart of the app`() {
+        // 「保留」不改照片库，所以它必须留下一条账 —— 否则用户滑过的照片下次会原封不动
+        // 地重新排队，首页数字也永远停在「一共有多少张」。
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val vm = makeVm(
+            session = session,
+            reviewed = ledger,
+            totalCount = 3,
+            loaderImages = (1L..3L).map { makeImage(it) },
+        )
+
+        vm.keep()
+
+        assertTrue(ledger.contains(1L))
+        // 落盘是**节流**的（攒够 20 条或隔 1 秒写一次），所以刚滑完这一秒内快照可能还没更新。
+        // 真正的持久化保障是「退出整理页 / 提交 / onCleared」三处的 flush —— 这里显式验证它。
+        ledger.flush()
+        assertTrue(ReviewedLedger(session).contains(1L))
+    }
+
+    @Test
+    fun `already reviewed photos never re-enter the queue`() {
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        ledger.mark(1L)
+        ledger.mark(2L)
+
+        val vm = makeVm(
+            session = session,
+            reviewed = ledger,
+            totalCount = 3,
+            remaining = 1,
+            loaderImages = (1L..3L).map { makeImage(it) },
+        )
+
+        // 队列里只剩第 3 张；分母也是「待整理」的 1，而不是总数 3
+        assertEquals(3L, vm.state.value.current?.id)
+        assertEquals(1, vm.state.value.total)
+        assertEquals(3, vm.state.value.rawTotal)
+        assertEquals(2, vm.state.value.alreadyReviewed)
+    }
+
+    @Test
+    fun `a scope that is entirely reviewed is finished, not a load failure`() {
+        // 全滤空与「查询坏了」在数据上都是「窗口是空的」，但结论相反：
+        // 一个是没事干了，一个是把照片读没了。混在一起就会重演那次「明明还有照片却报完成」。
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        (1L..3L).forEach { ledger.mark(it) }
+
+        val vm = makeVm(
+            session = session,
+            reviewed = ledger,
+            totalCount = 3,
+            remaining = 0,
+            loaderImages = (1L..3L).map { makeImage(it) },
+        )
+
+        assertTrue(vm.state.value.finished)
+        assertFalse(vm.state.value.loadError)
+    }
+
+    @Test
+    fun `pages made entirely of reviewed photos are paged through instead of stalling`() {
+        // 大库里「前 150 张都整理过了」很常见。整页被滤空时必须继续翻页，
+        // 否则用户看到的是永久转圈（preparing），而数据源其实还有内容。
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val all = (1L..300L).map { makeImage(it) }
+        (1L..150L).forEach { ledger.mark(it) }
+        val calls = mutableListOf<Pair<Int, Int>>()
+        val vm = makeVm(
+            session = session,
+            reviewed = ledger,
+            totalCount = 300,
+            remaining = 150,
+            loader = { offset, limit ->
+                calls += offset to limit
+                all.drop(offset).take(limit)
+            },
+        )
+
+        assertEquals(151L, vm.state.value.current?.id)
+        assertEquals(listOf(0 to 150, 150 to 150), calls)
+    }
+
+    @Test
+    fun `undo puts the photo back into the unreviewed queue`() {
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val vm = makeVm(
+            session = session,
+            reviewed = ledger,
+            totalCount = 3,
+            loaderImages = (1L..3L).map { makeImage(it) },
+        )
+
+        vm.keep()
+        assertTrue(ledger.contains(1L))
+
+        vm.undo()
+
+        // 留在账本里的话，这张既不在队列里、也不算待整理 —— 从用户视角就是凭空消失
+        assertFalse(ledger.contains(1L))
+        assertEquals(1L, vm.state.value.current?.id)
+    }
+
+    @Test
+    fun `restart re-reviews the whole scope without erasing the ledger`() {
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val vm = makeVm(
+            session = session,
+            reviewed = ledger,
+            totalCount = 3,
+            loaderImages = (1L..3L).map { makeImage(it) },
+        )
+
+        vm.keep()
+        vm.keep()
+        vm.restart()
+
+        // 「再来一轮」= 重看这一范围的全部照片：分母回到总数，第 1 张重新排队
+        assertEquals(3, vm.state.value.total)
+        assertEquals(1L, vm.state.value.current?.id)
+        // 但账本不动：滑到一半退出去再进来，看到的仍然应该是「已整理」
+        assertTrue(ledger.contains(1L))
+        assertTrue(ledger.contains(2L))
     }
 
     @Test

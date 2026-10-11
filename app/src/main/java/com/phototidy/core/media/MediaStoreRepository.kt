@@ -47,6 +47,14 @@ data class LibraryOverview(
 ) {
     val isEmpty: Boolean get() = totalCount == 0
 
+    /**
+     * 还没整理过的总张数。
+     *
+     * 由各月份聚合而来，而不是单独扫一遍 —— 全局待整理数恒等于所有月份待整理数之和
+     * （每张照片恰好落在一个月里），再扫一次纯属浪费。
+     */
+    val remainingCount: Int get() = months.sumOf { it.remaining }
+
     companion object {
         val Empty = LibraryOverview(0, 0L, null, emptyList(), emptyList())
     }
@@ -104,8 +112,12 @@ class MediaStoreRepository(
      * 既避开了厂商差异，也拿到了分页的内存收益。
      *
      * 游标按拍摄时间倒序，所以**每个分组第一次出现的那一行就是该组最新的照片**，直接当封面。
+     *
+     * [isReviewed] 是「已整理」账本。顺手在同一个循环里算出每个相册 / 每个月份的**待整理**张数：
+     * 再扫一遍全库只为数出「还剩多少」，在 12.5 万张的库上要多花一次完整扫描的时间，不值。
      */
-    suspend fun loadOverview(): LibraryOverview = withContext(Dispatchers.IO) {
+    suspend fun loadOverview(isReviewed: (Long) -> Boolean = { false }): LibraryOverview =
+        withContext(Dispatchers.IO) {
         val albums = HashMap<Long, AlbumAcc>()
         val months = HashMap<Int, MonthAcc>()
         val zone = ZoneId.systemDefault()
@@ -152,6 +164,11 @@ class MediaStoreRepository(
                     )
                 }
                 album.count++
+
+                if (!isReviewed(c.getLong(cols.id))) {
+                    month.remaining++
+                    album.remaining++
+                }
             }
         }
 
@@ -166,12 +183,21 @@ class MediaStoreRepository(
                     relativePath = acc.path,
                     count = acc.count,
                     cover = acc.cover,
+                    remaining = acc.remaining,
                 )
             }
                 // 用「最新一张照片的时间」排序：刚拍完的相册就该排在最前面
                 .sortedByDescending { it.cover?.takenAtMillis ?: 0L },
             months = months.values
-                .map { MonthGroup(year = it.year, month = it.month, count = it.count, cover = it.cover) }
+                .map {
+                    MonthGroup(
+                        year = it.year,
+                        month = it.month,
+                        count = it.count,
+                        cover = it.cover,
+                        remaining = it.remaining,
+                    )
+                }
                 .sortedWith(compareByDescending<MonthGroup> { it.year }.thenByDescending { it.month }),
         )
     }
@@ -488,10 +514,16 @@ class MediaStoreRepository(
 
     private class AlbumAcc(val name: String, val path: String, val cover: MediaImage) {
         var count: Int = 0
+
+        /** 其中还没整理过的张数。 */
+        var remaining: Int = 0
     }
 
     private class MonthAcc(val year: Int, val month: Int, val cover: MediaImage) {
         var count: Int = 0
+
+        /** 其中还没整理过的张数。 */
+        var remaining: Int = 0
     }
 
     /** 直写结果：哪些 URI 被系统拒绝，以及首个非权限类错误。 */

@@ -182,6 +182,20 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
         scopeEncoded = MediaScope.encode(scope)
     }
 
+    /**
+     * 退出整理页。
+     *
+     * 必须做两件事，否则用户会看到那个「滑完 4 张，返回上一级还是 15 张」的现象：
+     *  1. 把「已整理」账本结清（节流窗口里可能还欠着十几条没落盘）；
+     *  2. 重扫照片库 —— 首页/相册/范围菜单上的「剩 N 张」全部由概览聚合得出，
+     *     不重扫的话它们仍停留在进入整理页之前的数字。
+     */
+    fun leaveReview() {
+        Graph.reviewedLedger.flush()
+        libraryVm.refresh()
+        scopeEncoded = ""
+    }
+
     // 首次进入整理页自动讲一次手势（只讲一次，之后不再打扰）
     LaunchedEffect(reviewScope?.key) {
         if (reviewScope != null && !settings.helpShown) {
@@ -190,8 +204,8 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
         }
     }
 
-    // 系统返回 / 预测性返回：整理页 → 设置页 → 交给系统
-    BackHandler(enabled = reviewScope != null) { scopeEncoded = "" }
+    // 系统返回 / 预测性返回：整理页 → 回收站 → 设置页 → 交给系统
+    BackHandler(enabled = reviewScope != null) { leaveReview() }
     BackHandler(enabled = reviewScope == null && showTrash) { showTrash = false }
     BackHandler(enabled = reviewScope == null && !showTrash && showSettings) { showSettings = false }
 
@@ -211,12 +225,17 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                     val loader = remember(reviewScope.key) {
                         libraryVm.pageLoader(reviewScope)
                     }
+                    // 两个数都要：total 是分页上界（照片一共多少），remaining 是进度条分母
+                    // 与「还剩多少」的口径（还没整理的有多少）。混用它们就会出现
+                    // 「滑完 4 张，数字还是 15」这种看起来完全没生效的现象。
                     val total = libraryVm.scopeCount(reviewScope)
+                    val remaining = libraryVm.scopeRemaining(reviewScope)
                     val reviewVm: ReviewViewModel = viewModel(
                         key = "review-${reviewScope.key}",
                         factory = ReviewViewModel.factory(
                             scope = reviewScope,
                             total = total,
+                            remaining = remaining,
                             moveTargets = moveTargets,
                             loader = loader,
                             // 提交真的改动了照片库，外层数据必须重扫，否则首页/回收站还在显示旧状态
@@ -233,12 +252,14 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                         libraryState.albums,
                         libraryState.months,
                         libraryState.totalCount,
+                        libraryState.remainingTotal,
                     ) {
                         buildList {
                             add(
                                 ScopeOption(
                                     scope = MediaScope.Recent,
                                     count = libraryState.totalCount,
+                                    remaining = libraryState.remainingTotal,
                                     group = ScopeGroup.Recent,
                                 ),
                             )
@@ -247,6 +268,7 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                                     ScopeOption(
                                         scope = MediaScope.Album(album.bucketId, album.name),
                                         count = album.count,
+                                        remaining = album.remaining,
                                         group = ScopeGroup.Album,
                                     ),
                                 )
@@ -256,6 +278,7 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                                     ScopeOption(
                                         scope = MediaScope.Month(month.year, month.month),
                                         count = month.count,
+                                        remaining = month.remaining,
                                         group = ScopeGroup.Month,
                                     ),
                                 )
@@ -274,7 +297,7 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                     val onRestart = remember(reviewVm) { reviewVm::restart }
                     val onDefer = remember(reviewVm) { reviewVm::deferCurrent }
                     val onRetryLoad = remember(reviewVm) { reviewVm::retryLoad }
-                    val onCloseReview = remember { { scopeEncoded = "" } }
+                    val onCloseReview = remember { { leaveReview() } }
                     val onOpenHelp = remember { { helpVisible = true } }
                     val onPickScope = remember { { scope: MediaScope -> openScope(scope) } }
 

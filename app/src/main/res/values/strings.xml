@@ -22,6 +22,21 @@
     <plurals name="photo_count">
         <item quantity="other">%1$d 张</item>
     </plurals>
+    <!--
+      「还剩多少张没整理」—— 主口径。
+
+      参考实现（Slidebox）全程只报这一个数：用户要回答的问题是「我还剩多少活要干」，
+      而不是「这个范围里一共躺着多少张」。总数降为副信息（见 photo_remaining_compact）。
+    -->
+    <plurals name="photo_remaining">
+        <item quantity="other">剩 %1$d 张</item>
+    </plurals>
+    <plurals name="photo_remaining_compact">
+        <item quantity="other">剩 %1$d / %2$d</item>
+    </plurals>
+    <plurals name="photo_remaining_of_total">
+        <item quantity="other">剩 %1$d 张 · 共 %2$d 张</item>
+    </plurals>
     <plurals name="selected_count">
         <item quantity="other">已选 %1$d 张</item>
     </plurals>
@@ -45,12 +60,24 @@
     <string name="scope_recent">最近</string>
     <string name="scope_recent_all">最近（全部）</string>
     <string name="scope_pick_title">选择整理范围</string>
+    <string name="scope_remaining_of_total">剩 %1$s / %2$s</string>
+
+    <!-- ============================================================ 已整理 -->
+    <!--
+      注意：「已整理」是纯状态口径（账本 + 计数扣减），**不提供独立页面**。
+      对标 Slidebox —— 它没有「已整理」这个入口，整理完的照片就是不再出现在队列里。
+      反悔的途径是整理页里的「撤销」与「再来一轮」。
+    -->
+
     <string name="scope_section_albums">相册</string>
     <string name="scope_section_months">按月份</string>
 
     <!-- ============================================================ 首页 -->
     <string name="home_subtitle_empty">还没有可整理的照片</string>
     <string name="home_subtitle">%1$s · %2$s</string>
+    <!-- 首页副标题：先报「还剩多少要整理」，再报占用空间 -->
+    <string name="home_subtitle_remaining">%1$s待整理 · %2$s</string>
+    <string name="home_subtitle_done">全部整理完了 · %1$s</string>
     <string name="badge_partial">部分授权</string>
     <string name="home_section_time">按时间</string>
     <string name="home_section_folders">文件夹</string>

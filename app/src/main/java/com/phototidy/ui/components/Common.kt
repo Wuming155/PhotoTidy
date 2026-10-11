@@ -201,12 +201,14 @@ fun AlbumRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // 主数字同样是「还剩多少要整理」，口径与首页/范围菜单一致：一律「剩 N · 共 M」。
+                val countLabel = remainingOfTotalLabel(album.remaining, album.count)
                 Text(
                     text = if (showPath && album.relativePath.isNotBlank()) {
                         // 路径是设备事实，保持原样；数量词走本地化
-                        "${album.relativePath.trimEnd('/')} · ${photosLabel(album.count)}"
+                        "${album.relativePath.trimEnd('/')} · $countLabel"
                     } else {
-                        photosLabel(album.count)
+                        countLabel
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

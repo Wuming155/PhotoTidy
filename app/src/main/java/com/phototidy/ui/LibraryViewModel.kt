@@ -11,6 +11,7 @@ import com.phototidy.core.media.LibraryOverview
 import com.phototidy.core.media.MediaAccess
 import com.phototidy.core.media.MediaOpCoordinator
 import com.phototidy.core.media.MediaStoreRepository
+import com.phototidy.core.media.ReviewedLedger
 import com.phototidy.core.media.SessionStore
 import com.phototidy.core.media.StagingTrash
 import com.phototidy.core.media.isImageDestinationLegal
@@ -68,7 +69,18 @@ data class LibraryUiState(
 
     val totalCount: Int get() = overview?.totalCount ?: 0
 
+    /**
+     * 还没整理过的总张数 —— 首页所有数字的主口径。
+     *
+     * 与参考实现一致：用户要看的是「还剩多少要整理」；照片总数降为副信息。
+     * 口径上与 [totalCount] 的区别只有一条 —— 扣掉「已整理」账本里的照片。
+     */
+    val remainingTotal: Int get() = overview?.remainingCount ?: 0
+
     val totalBytes: Long get() = overview?.totalBytes ?: 0L
+
+    /** 已整理的总张数，首页入口上的数字。 */
+    val reviewedCount: Int get() = (totalCount - remainingTotal).coerceAtLeast(0)
 
     /** 最新的一张，首页封面用。 */
     val newest: MediaImage? get() = overview?.newest
@@ -92,6 +104,8 @@ class LibraryViewModel(
     private val staging: StagingTrash,
     private val session: SessionStore,
     private val res: Resources,
+    /** 「已整理」账本：概览扫描要用它把待整理数从总数里扣出来。 */
+    private val reviewed: ReviewedLedger,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LibraryUiState())
@@ -127,7 +141,9 @@ class LibraryViewModel(
                 // 大库上刷新耗时从「三者之和」收敛为「最慢的一个」。
                 // runCatching 换成不吞取消的变体：取消是流程控制不是失败，
                 // 吞掉会让「刷新被取消」冒充成「读取失败」弹给用户。
-                val overviewDeferred = async { runCatchingUnlessCancelled { repo.loadOverview() } }
+                val overviewDeferred = async {
+                    runCatchingUnlessCancelled { repo.loadOverview(reviewed::contains) }
+                }
                 val trashCountDeferred = async { runCatchingUnlessCancelled { repo.countTrashed() } }
                 val firstPageDeferred =
                     async { runCatchingUnlessCancelled { repo.pageTrashed(0, TRASH_PAGE_SIZE) } }
@@ -241,16 +257,32 @@ class LibraryViewModel(
     }
 
     /**
-     * 某个整理范围里有多少张。
+     * 某个整理范围里一共多少张照片。
      *
      * 数据来自概览聚合，**不需要**再扫一次库 —— 这是把「总数」和「照片列表」拆开之后
-     * 顺带拿到的收益：进整理页之前就已经知道进度条分母了。
+     * 顺带拿到的收益：进整理页之前就已经知道分页上界了。
+     *
+     * 注意：这是**分页上界**，不是进度条分母。分母要用 [scopeRemaining]。
      */
     fun scopeCount(scope: MediaScope): Int = when (scope) {
         MediaScope.Recent -> _state.value.totalCount
         is MediaScope.Album -> _state.value.albums.firstOrNull { it.bucketId == scope.bucketId }?.count ?: 0
         is MediaScope.Month -> _state.value.months
             .firstOrNull { it.year == scope.year && it.month == scope.month }?.count ?: 0
+    }
+
+    /**
+     * 某个范围内**还没整理**的张数 —— 进度条分母与首页数字都用它。
+     *
+     * 与 [scopeCount] 的差值就是「这个范围已经整理掉多少张」，这正是用户要看到的区别。
+     */
+    fun scopeRemaining(scope: MediaScope): Int = when (scope) {
+        MediaScope.Recent -> _state.value.remainingTotal
+        is MediaScope.Album -> _state.value.albums
+            .firstOrNull { it.bucketId == scope.bucketId }?.remaining ?: 0
+
+        is MediaScope.Month -> _state.value.months
+            .firstOrNull { it.year == scope.year && it.month == scope.month }?.remaining ?: 0
     }
 
     /** 给整理会话用的分页取数器。分页真正落在 SQL 的 LIMIT/OFFSET 上。 */
@@ -305,7 +337,13 @@ class LibraryViewModel(
         viewModelScope.launch {
             ops.runStaged(
                 successMessage = res.getString(R.string.trash_restored, images.size),
-                onSuccess = { refresh() },
+                // 还原 = 照片回到照片库，于是它**重新变成未整理** —— 参考实现的做法
+                // （「恢复后这些照片会被视为未分类」）。不抹掉账本的话，还原回来的照片
+                // 会永远排不进整理队列，用户再也没法决定它们。
+                onSuccess = {
+                    reviewed.unmark(images.map { it.id })
+                    refresh()
+                },
                 consentBudget = 1,
             ) { attempt -> repo.restoreFromSystemTrash(images.map { it.id }, attempt) }
         }
@@ -331,6 +369,7 @@ class LibraryViewModel(
                     staging = Graph.stagingTrash,
                     session = Graph.sessionStore,
                     res = Graph.resources,
+                    reviewed = Graph.reviewedLedger,
                 )
             }
         }
