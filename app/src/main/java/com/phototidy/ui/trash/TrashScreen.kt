@@ -120,21 +120,28 @@ fun TrashScreen(
      * 选中状态的高频写入口是划选：拖动期间每个事件帧都在改 [selectedIds]。
      *
      * 刻意**不**在组合期把选中的照片 filter 成一份列表 —— 那会让本函数每个拖动帧
-     * 都做一次 O(n) 扫描 + 列表分配，且整页跟着每帧重组。这里只派生一个计数，
-     * 完整列表推迟到点击「还原 / 彻底删除」那一刻再算（见 [selectedList]）。
-     * derivedStateOf 只在结果真的变化时才通知读者：手指划过已选中的区域时，
-     * set 变了但计数没变，动作条不会重组。
+     * 都做一次 O(n) 扫描 + 列表分配，且整页跟着每帧重组。计数改用选中集的 size
+     * （O(1)），完整列表推迟到点击「还原 / 彻底删除」那一刻再算（见 [selectedList]）。
      */
-    val selectedCount by remember(systemTrash) {
-        derivedStateOf { systemTrash.count { it.id in selectedIds } }
-    }
+    val selectedCount by remember { derivedStateOf { selectedIds.size } }
     val hasMore = systemTrash.size < trashCount
     val allLoaded = systemTrash.size >= trashCount
-    // 「全选了吗」的检查本身是 O(n)：不派生的话，这个检查会把每帧的选中写入
-    // 都放大成整页重组
+    // 「全选了吗」的检查本身是 O(n)（提前短路，未全选时开销极小）：不派生的话，
+    // 这个检查会把每帧的选中写入都放大成整页重组
     val allSelected by remember(systemTrash, trashCount) {
         derivedStateOf {
             allLoaded && systemTrash.isNotEmpty() && systemTrash.all { it.id in selectedIds }
+        }
+    }
+
+    // size 能当计数用的前提是「selectedIds ⊆ 当前列表」。每个写入点都只放当前列表
+    // 里的 id（格子 toggle / 全选 / 清空），但列表会在翻页、还原、刷新时被整体替换 ——
+    // 这里在每次列表变化后把选中集收敛一次，把幽灵 id 剔掉。幂等：只在真的出现
+    // 不在列表里的选中时才重建集合。
+    LaunchedEffect(systemTrash) {
+        val ids = systemTrash.mapTo(HashSet()) { it.id }
+        if (!ids.containsAll(selectedIds)) {
+            selectedIds = selectedIds intersect ids
         }
     }
 

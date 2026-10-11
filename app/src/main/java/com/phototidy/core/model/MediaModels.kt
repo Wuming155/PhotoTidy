@@ -141,7 +141,11 @@ data class PendingMove(
     val targetPath: String,
     /** 目标相册展示名，仅用于回显。 */
     val albumName: String,
-    /** 目标相册 bucketId；系统标准目录用负数占位。 */
+    /**
+     * 目标相册 bucketId；系统标准目录没有真实 bucketId，
+     * 用 Int32 表示范围之外的哨兵值占位（真实 BUCKET_ID 是 int32 的路径哈希，
+     * 两者不可能相撞）。随快照落盘再读回，因此取值必须稳定、可序列化。
+     */
     val bucketId: Long,
     /** 目标相册原有 relativePath，恢复时用于重建相册对象。 */
     val albumPath: String,

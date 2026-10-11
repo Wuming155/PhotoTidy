@@ -1,5 +1,6 @@
 package com.phototidy.ui.review
 
+import android.util.Log
 import com.phototidy.core.StringProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -302,6 +303,8 @@ class ReviewViewModel(
                 // 意料外的异常（个别 ROM 的 MediaStore 怪癖等）。不能放它出去：
                 // viewModelScope 没有异常处理器，未捕获异常会把整个应用崩掉，
                 // 而崩溃前留下的是「提交到一半」的中间态。
+                // 这类异常恰恰是最需要现场证据的 —— 必须留下完整堆栈，不能只弹「操作失败」。
+                Log.e(TAG, "commit failed: ${pendingLabel(moves.size, trashes.size)}", e)
                 ops.emit(strings.get(R.string.media_op_failed))
             } finally {
                 // 不论成功、被拒还是中断，收尾都不能省：
@@ -445,6 +448,8 @@ class ReviewViewModel(
     }
 
     companion object {
+        private const val TAG = "ReviewViewModel"
+
         fun factory(
             scope: MediaScope,
             total: Int,

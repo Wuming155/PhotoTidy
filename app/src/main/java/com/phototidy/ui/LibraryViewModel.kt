@@ -17,6 +17,7 @@ import com.phototidy.core.model.MediaAlbum
 import com.phototidy.core.model.MediaImage
 import com.phototidy.core.model.MediaScope
 import com.phototidy.core.model.MonthGroup
+import com.phototidy.util.runCatchingUnlessCancelled
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -121,9 +122,11 @@ class LibraryViewModel(
             _state.update { it.copy(loading = true) }
             // 概览（全表扫描）、回收站计数、回收站首页三路查询互不依赖，并行取：
             // 大库上刷新耗时从「三者之和」收敛为「最慢的一个」。
-            val overviewDeferred = async { runCatching { repo.loadOverview() } }
-            val trashCountDeferred = async { runCatching { repo.countTrashed() } }
-            val firstPageDeferred = async { runCatching { repo.pageTrashed(0, TRASH_PAGE_SIZE) } }
+            // runCatching 换成不吞取消的变体：取消是流程控制不是失败，
+            // 吞掉会让「刷新被取消」冒充成「读取失败」弹给用户。
+            val overviewDeferred = async { runCatchingUnlessCancelled { repo.loadOverview() } }
+            val trashCountDeferred = async { runCatchingUnlessCancelled { repo.countTrashed() } }
+            val firstPageDeferred = async { runCatchingUnlessCancelled { repo.pageTrashed(0, TRASH_PAGE_SIZE) } }
 
             val overview = overviewDeferred.await()
                 .onFailure {

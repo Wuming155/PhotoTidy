@@ -116,10 +116,9 @@ class MediaStoreRepository(
         // 只有跨月（以及 DATE_TAKEN 缺失、退化用 DATE_ADDED 的乱序段）才需要重新做时区换算。
         // 不缓存的话，每一行都要分配 Instant + ZonedDateTime —— 12.5 万张就是几十 MB
         // 的瞬时垃圾，全砸在冷启动最慢的这条扫描路径上。
-        // 窗口边界与 [MediaScope.filter] 里 Month 条件的 SQL 口径完全一致，行为不变。
-        var windowStart = Long.MAX_VALUE
-        var windowEnd = Long.MIN_VALUE
-        var windowKey = 0
+        // 窗口由 [monthWindowAt] 产出，边界口径与 [MediaScope.filter] 里 Month 条件的
+        // SQL 完全一致，行为不变。
+        var window: MonthWindow? = null
 
         openCursor(selection = VISIBLE, onlyTrashed = false)?.use { c ->
             val cols = Cols(c)
@@ -132,19 +131,12 @@ class MediaStoreRepository(
                 bytes += size
                 if (newest == null) newest = c.toImage(cols)
 
-                val key = if (taken >= windowStart && taken < windowEnd) {
-                    windowKey
-                } else {
-                    val dt = Instant.ofEpochMilli(taken).atZone(zone)
-                    val ym = YearMonth.from(dt)
-                    windowKey = ym.year * 100 + ym.monthValue
-                    windowStart = ym.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-                    windowEnd = ym.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-                    windowKey
-                }
-                // year * 100 + month 恒可逆：month 只有 1..12
-                val month = months.getOrPut(key) {
-                    MonthAcc(year = key / 100, month = key % 100, cover = c.toImage(cols))
+                // 命中判定按值校验区间而非假设游标单调：即便日期口径分叉导致乱序，
+                // 也只是多算几次窗口，不会把照片分错月份
+                val w = window?.takeIf { taken >= it.startMillis && taken < it.endMillisExclusive }
+                    ?: monthWindowAt(taken, zone).also { window = it }
+                val month = months.getOrPut(w.key) {
+                    MonthAcc(year = w.year, month = w.month, cover = c.toImage(cols))
                 }
                 month.count++
 
@@ -552,6 +544,35 @@ class MediaStoreRepository(
                 " ${MediaStore.MediaColumns.DATE_ADDED} DESC," +
                 " ${MediaStore.MediaColumns._ID} DESC"
     }
+}
+
+/**
+ * 某个毫秒时刻所属的「本地日历月」窗口。
+ *
+ * [startMillis] / [endMillisExclusive] 的口径必须与 [MediaScope.filter] 里 Month 条件的
+ * SQL 边界（`EFFECTIVE_DATE >= start AND < end`，两端都用 `atStartOfDay(zone)`）完全一致，
+ * 否则「按月整理」会漏照片。抽成纯函数是为了让跨月 / 跨年 / DST / 时间戳为 0 这些
+ * 边界能在 JVM 单测里直测 —— 这是冷启动扫描里唯一「正确性敏感」的换算。
+ */
+internal data class MonthWindow(
+    val year: Int,
+    val month: Int,
+    val startMillis: Long,
+    val endMillisExclusive: Long,
+) {
+    /** HashMap 分组用的稳定键。 */
+    val key: Int get() = year * 100 + month
+}
+
+/** [epochMillis] 落在 [zone] 时区的哪个日历月，以及该月的毫秒区间。 */
+internal fun monthWindowAt(epochMillis: Long, zone: ZoneId): MonthWindow {
+    val ym = YearMonth.from(Instant.ofEpochMilli(epochMillis).atZone(zone))
+    return MonthWindow(
+        year = ym.year,
+        month = ym.monthValue,
+        startMillis = ym.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli(),
+        endMillisExclusive = ym.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli(),
+    )
 }
 
 /**

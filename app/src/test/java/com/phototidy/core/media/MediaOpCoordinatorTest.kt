@@ -1,7 +1,10 @@
 package com.phototidy.core.media
 
+import android.content.IntentSender
+import com.phototidy.R
 import com.phototidy.core.StringProvider
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -14,6 +17,19 @@ class MediaOpCoordinatorTest {
 
     private val strings = object : StringProvider {
         override fun get(resId: Int, vararg args: Any) = "res:$resId"
+    }
+
+    /**
+     * JVM 单测里造一个可用的 IntentSender：android.jar 桩的构造器会抛 "Stub!"
+     * （`returnDefaultValues` 只兜方法、兜不了构造器），用 Unsafe 绕过构造逻辑。
+     * sun.misc 在 android.jar 的编译类路径上不可见，只能走反射；
+     * 测试里只把它塞进请求对象，从不真正启动。
+     */
+    private fun stubIntentSender(): IntentSender {
+        val unsafeClass = Class.forName("sun.misc.Unsafe")
+        val theUnsafe = unsafeClass.getDeclaredField("theUnsafe").apply { isAccessible = true }
+        val allocate = unsafeClass.methods.first { it.name == "allocateInstance" }
+        return allocate.invoke(theUnsafe.get(null), IntentSender::class.java) as IntentSender
     }
 
     @Test
@@ -72,5 +88,90 @@ class MediaOpCoordinatorTest {
         second.join()
         assertTrue(firstFinished)
         assertTrue(secondFinished)
+    }
+
+    @Test
+    fun `cancelling a waiting operation releases the gate`() = runTest {
+        // gate 属于「泄漏即永久死锁」的设施：第一个操作挂在授权等待上被取消时，
+        // withLock 的 finally 必须让出闸，第二个操作要能照常跑完。
+        val ops = MediaOpCoordinator(strings)
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            ops.consent.collect {}
+        }
+        val firstStarted = CompletableDeferred<Unit>()
+        var secondFinished = false
+
+        val first = launch {
+            ops.runStaged(successMessage = "s1", consentBudget = 1) {
+                firstStarted.complete(Unit)
+                MediaOpResult.NeedsConsent(stubIntentSender(), ConsentKind.Write)
+            }
+        }
+        firstStarted.await()
+        runCurrent() // 确保已经挂进授权等待
+
+        val second = launch {
+            ops.runStaged(successMessage = "s2", consentBudget = 1) {
+                secondFinished = true
+                MediaOpResult.Success
+            }
+        }
+        first.cancel()
+        first.join()
+        second.join()
+        assertTrue(secondFinished)
+    }
+
+    @Test
+    fun `no consent subscriber reports denied instead of hanging`() = runTest {
+        // SharedFlow(replay=0) 在无订阅者时 tryEmit 恒返回 true（值被丢弃）——
+        // 拿它的返回值判定「没人订阅」的话，这里会永久悬挂且 gate 不释放。
+        // 正确行为：按订阅数判定，立即按「未授权」收口。
+        val ops = MediaOpCoordinator(strings)
+        var failureMsg: String? = null
+        ops.runStaged(
+            successMessage = "done",
+            onFailure = { failureMsg = it },
+            consentBudget = 1,
+        ) { MediaOpResult.NeedsConsent(stubIntentSender(), ConsentKind.Write) }
+        assertEquals("res:${R.string.media_op_consent_denied}", failureMsg)
+    }
+
+    @Test
+    fun `resumeConsent delivers the user's answer to the right waiter`() = runTest {
+        val ops = MediaOpCoordinator(strings)
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            ops.consent.collect {}
+        }
+        val sender = stubIntentSender()
+
+        var firstMsg: String? = null
+        val first = launch {
+            ops.runStaged(
+                successMessage = "s1",
+                onFailure = { firstMsg = it },
+                consentBudget = 1,
+            ) { MediaOpResult.NeedsConsent(sender, ConsentKind.Write) }
+        }
+        runCurrent() // first 已在等待授权
+        ops.resumeConsent(false) // 用户拒绝 → 第一个按「未授权」收口
+        first.join()
+        assertEquals("res:${R.string.media_op_consent_denied}", firstMsg)
+
+        var secondSucceeded = false
+        val second = launch {
+            ops.runStaged(
+                successMessage = "s2",
+                onSuccess = { secondSucceeded = true },
+                consentBudget = 1,
+            ) { attempt ->
+                if (attempt == 0) MediaOpResult.NeedsConsent(sender, ConsentKind.Write)
+                else MediaOpResult.Success
+            }
+        }
+        runCurrent() // second 已在等待授权
+        ops.resumeConsent(true) // 用户同意 → 重放（attempt=1）→ 成功
+        second.join()
+        assertTrue(secondSucceeded)
     }
 }

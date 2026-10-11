@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 /**
@@ -32,7 +33,10 @@ import kotlin.coroutines.resume
  *    rapidActivityLaunch 保护，把 MediaProvider 连同本应用一起杀掉。
  *
  * 2. **没有订阅者时绝不悬挂**。UI 还没订阅 [consent] 流时直接判定「未授权」返回，
- *    而不是让协程永远等下去。
+ *    而不是让协程永远等下去。判定依据是**订阅数**而不是 `tryEmit` 的返回值 ——
+ *    后者在无订阅者时恒为 true（值被静默丢弃），拿它判定会把「永远等不到结果」
+ *    伪装成「已送达」（见 [awaitConsent]）。等待授权本身还有兜底超时：
+ *    握着 [gate] 的协程必须保证最终走完，否则整个应用的媒体写操作都会被堵死。
  *
  * 失败文案走 [StringProvider]（`core/` 里不留任何字面量），
  * 这样这个类仍然可以在 JVM 单测里用假实现跑起来。
@@ -106,18 +110,23 @@ class MediaOpCoordinator(private val strings: StringProvider) {
                         return
                     }
 
-                    is MediaOpResult.NeedsConsent -> when {
-                        attempt >= consentBudget -> {
+                    is MediaOpResult.NeedsConsent -> {
+                        if (attempt >= consentBudget) {
                             report(
                                 onFailure,
                                 strings.get(R.string.media_op_budget_exhausted),
                             )
                             return
                         }
-
-                        awaitConsent(result.intentSender) -> attempt += 1
-
-                        else -> {
+                        // 兜底超时：授权框是系统 UI，万一订阅者中途挂掉、结果永远不回来，
+                        // 不能让 gate 被永远占着 —— 超时按「未授权」收口，闸照常释放。
+                        // 时间给得远超任何真实用户的阅读/犹豫时长。
+                        val granted = withTimeoutOrNull(CONSENT_TIMEOUT_MILLIS) {
+                            awaitConsent(result.intentSender)
+                        } ?: false
+                        if (granted) {
+                            attempt += 1
+                        } else {
                             report(onFailure, strings.get(R.string.media_op_consent_denied))
                             return
                         }
@@ -132,9 +141,18 @@ class MediaOpCoordinator(private val strings: StringProvider) {
         emit(message)
     }
 
-    /** 挂起直到用户在系统框上做出选择；没有订阅者时立即返回 false。 */
+    /**
+     * 挂起直到用户在系统框上做出选择；没有订阅者时立即返回 false。
+     */
     private suspend fun awaitConsent(sender: IntentSender): Boolean =
         suspendCancellableCoroutine { continuation ->
+            // 「没人订阅」的真实判据是订阅数，**不是** tryEmit 的返回值：
+            // SharedFlow 在 replay=0、无订阅者时 tryEmit 恒返回 true（值被静默丢弃），
+            // 拿它判定的话这条「安全网」分支永远走不到 —— waiting 挂死，gate 也不释放。
+            if (_consent.subscriptionCount.value == 0) {
+                continuation.resume(false)
+                return@suspendCancellableCoroutine
+            }
             // [gate] 已把授权流程串行化：走到这里时必然没有别的等待者，
             // waiting 必为 null。下面的 cancel 只是防御性兜底 —— 若未来有人
             // 绕过 gate 调到这里，宁可取消上一个等待者也不能让槽位被覆盖后泄漏。
@@ -159,5 +177,10 @@ class MediaOpCoordinator(private val strings: StringProvider) {
 
     fun emit(message: String) {
         _messages.tryEmit(message)
+    }
+
+    private companion object {
+        /** 等待用户在系统授权框上做选择的兜底上限：5 分钟，只防「结果永远不回来」。 */
+        const val CONSENT_TIMEOUT_MILLIS = 5L * 60_000L
     }
 }

@@ -54,7 +54,11 @@ fun AlbumQuickMoveBar(
                 contentPadding = PaddingValues(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                items(items = albums, key = { it.bucketId }) { album ->
+                // key 用 id+name 的组合而不只 id：列表里混有「系统标准目录」的合成相册，
+                // 它的 id 是 Int32 范围外的哨兵值（见 LibraryViewModel.SYNTHETIC_BUCKET_BASE），
+                // 理论上不可能与真实相册相撞；让 key 同时携带名字，把唯一性由构造保证，
+                // 而不是依赖「id 数值范围永不重叠」这个跨厂商假设。
+                items(items = albums, key = { "${it.bucketId}:${it.name}" }) { album ->
                     AlbumMoveTarget(
                         album = album,
                         enabled = enabled,
