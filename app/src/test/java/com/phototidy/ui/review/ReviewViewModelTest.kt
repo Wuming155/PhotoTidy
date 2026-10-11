@@ -57,11 +57,14 @@ class ReviewViewModelTest {
         private val moveResult: MediaOpResult = MediaOpResult.Success,
         private val trashResult: MediaOpResult = MediaOpResult.Success,
         private val images: Map<Long, MediaImage> = emptyMap(),
+        /** 非空时 moveToAlbums 直接抛出：模拟 ROM 上意料外的异常（H1）。 */
+        private val moveError: Throwable? = null,
     ) : MediaRepository {
         var moveCalls = 0
         var trashCalls = 0
         override suspend fun moveToAlbums(items: List<PendingMove>): MediaOpResult {
             moveCalls++
+            moveError?.let { throw it }
             return moveResult
         }
         override suspend fun moveToSystemTrash(imageIds: List<Long>, attempt: Int): MediaOpResult {
@@ -78,6 +81,8 @@ class ReviewViewModelTest {
         scope: MediaScope = MediaScope.Recent,
         totalCount: Int = 20,
         loaderImages: List<MediaImage> = (1L..20L).map { makeImage(it) },
+        loader: (suspend (Int, Int) -> List<MediaImage>)? = null,
+        onCommitted: () -> Unit = {},
     ): ReviewViewModel {
         val staging = StagingTrash()
         val strings = object : StringProvider {
@@ -87,7 +92,8 @@ class ReviewViewModelTest {
         return ReviewViewModel(
             repo = repo, staging = staging, ops = ops, session = session, strings = strings,
             scope = scope, totalCount = totalCount, initialMoveTargets = emptyList(),
-            loader = { _, _ -> loaderImages },
+            loader = loader ?: { _, _ -> loaderImages },
+            onCommitted = onCommitted,
         )
     }
 
@@ -201,5 +207,52 @@ class ReviewViewModelTest {
         )
         val vm = makeVm(session = session, repo = FakeMediaRepository(images = mapOf(7L to makeImage(7L))))
         assertEquals(1, vm.state.value.pendingMoveCount)
+        // 恢复项占着 pendingMoves，「改动已结算」的派生条件不成立 ——
+        // 在真正提交之前 committed 必须保持 false，恢复不能污染完成态语义
+        assertFalse(vm.state.value.committed)
+    }
+
+    @Test
+    fun `window refills from the next page before running dry`() {
+        // 分页补窗是「翻到第 8 万张也不停顿」的保证：第一页滑穿之前下一页必须已在内存里；
+        // 页取不满说明数据源到头了，标记耗尽后不能再发起第三次请求。
+        val all = (1L..200L).map { makeImage(it) }
+        val calls = mutableListOf<Pair<Int, Int>>()
+        val vm = makeVm(
+            totalCount = 200,
+            loader = { offset, limit ->
+                calls += offset to limit
+                all.drop(offset).take(limit)
+            },
+        )
+        repeat(200) { index ->
+            assertFalse(vm.state.value.finished)
+            vm.trash()
+        }
+        assertTrue(vm.state.value.finished)
+        assertEquals(200, vm.state.value.stagedCount)
+        // 第一页 150 张 + 窗口剩余低于阈值时补的最后一页（50 < 150 → 到头）——恰好两次取数
+        assertEquals(listOf(0 to 150, 150 to 150), calls)
+    }
+
+    @Test
+    fun `commit resets submitting and keeps snapshot when repo throws (H1)`() {
+        // 仓库层已把可预期的失败包成 MediaOpResult，但个别 ROM 可能抛出意料外的异常。
+        // 提交流程必须有顶层兜底：submitting 复位、「打算」落盘保住、外层照常刷新 ——
+        // 而不是把异常放给没有 handler 的 viewModelScope，把整个应用崩掉。
+        val session = FakeSessionStore()
+        val repo = FakeMediaRepository(moveError = IllegalStateException("rom quirk"))
+        var committedCallbacks = 0
+        val vm = makeVm(repo = repo, session = session, onCommitted = { committedCallbacks++ })
+        vm.moveTo(moveAlbum)
+        assertEquals(1, vm.state.value.pendingMoveCount)
+
+        vm.commit()
+
+        assertFalse(vm.state.value.submitting)
+        // 中断的提交不丢「打算」：内存与落盘快照都必须原样保留
+        assertEquals(1, vm.state.value.pendingMoveCount)
+        assertEquals(1, session.loadPendingMoves(MediaScope.Recent.key).size)
+        assertEquals(1, committedCallbacks)
     }
 }

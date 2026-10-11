@@ -18,6 +18,7 @@ import com.phototidy.core.model.MediaScope
 import com.phototidy.core.model.PendingMove
 import com.phototidy.core.model.ReviewAction
 import com.phototidy.core.model.ReviewRecord
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -273,38 +274,47 @@ class ReviewViewModel(
                 it.copy(submitting = true, submittingLabel = pendingLabel(moves.size, trashes.size))
             }
 
-            // 1) 移动属于「改数据」：要一次写授权，授权后由应用自己改 RELATIVE_PATH
-            if (moves.isNotEmpty()) {
-                ops.run(
-                    successMessage = if (trashes.isEmpty()) {
-                        doneLabel(moves.size, 0)
-                    } else {
-                        strings.get(R.string.commit_moved, moves.size)
-                    },
-                    onSuccess = { moves.forEach { move -> pendingMoves.remove(move.imageId) } },
-                ) { repo.moveToAlbums(moves) }
+            try {
+                // 1) 移动属于「改数据」：要一次写授权，授权后由应用自己改 RELATIVE_PATH
+                if (moves.isNotEmpty()) {
+                    ops.run(
+                        successMessage = if (trashes.isEmpty()) {
+                            doneLabel(moves.size, 0)
+                        } else {
+                            strings.get(R.string.commit_moved, moves.size)
+                        },
+                        onSuccess = { moves.forEach { move -> pendingMoves.remove(move.imageId) } },
+                    ) { repo.moveToAlbums(moves) }
+                }
+
+                // 2) 进回收站属于「授权即执行」：用户点同意时系统已经做完了，应用不再动手
+                if (trashes.isNotEmpty()) {
+                    ops.runStaged(
+                        successMessage = doneLabel(moves.size, trashes.size),
+                        onSuccess = { staging.remove(trashes.map { it.id }) },
+                        consentBudget = 1,
+                    ) { attempt -> repo.moveToSystemTrash(trashes.map { it.id }, attempt) }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                // 顶层兜底。仓库层已把可预期的失败包成 MediaOpResult.Failed，能走到这里的是
+                // 意料外的异常（个别 ROM 的 MediaStore 怪癖等）。不能放它出去：
+                // viewModelScope 没有异常处理器，未捕获异常会把整个应用崩掉，
+                // 而崩溃前留下的是「提交到一半」的中间态。
+                ops.emit(strings.get(R.string.media_op_failed))
+            } finally {
+                // 不论成功、被拒还是中断，收尾都不能省：
+                //  · 「打算」必须与内存对齐后落盘 —— 成功时 onSuccess 已把队列清空，
+                //    这里存空列表等价于清除；被拒/中断时留在内存里的意图必须保住（见 R1）。
+                //  · submitting 必须复位 —— 否则异常路径上提交按钮永久转圈，会话锁死。
+                //  · 重扫照片库，让首页/回收站反映真实状态。
+                session.savePendingMoves(scope.key, pendingMoves.values.toList())
+                session.saveStaging(staging.items.value.map { it.id })
+                _state.update { it.copy(submitting = false, submittingLabel = "") }
+                syncState()
+                onCommitted()
             }
-
-            // 2) 进回收站属于「授权即执行」：用户点同意时系统已经做完了，应用不再动手
-            if (trashes.isNotEmpty()) {
-                ops.runStaged(
-                    successMessage = doneLabel(moves.size, trashes.size),
-                    onSuccess = { staging.remove(trashes.map { it.id }) },
-                    consentBudget = 1,
-                ) { attempt -> repo.moveToSystemTrash(trashes.map { it.id }, attempt) }
-            }
-
-            // 把落盘的「打算」与当前内存状态对齐：
-            // 成功时 onSuccess 已经把 pendingMoves 清空，这里存空列表等价于清除；
-            // 被拒时仍留在内存里的意图必须保留，否则进程被杀就会丢掉这批「打算」
-            // （与「意图可恢复」的设计自相矛盾，详见 R1）。
-            session.savePendingMoves(scope.key, pendingMoves.values.toList())
-            session.saveStaging(staging.items.value.map { it.id })
-
-            _state.update { it.copy(submitting = false, submittingLabel = "") }
-            syncState()
-            // 不论成功与否都重扫一次，让界面反映照片库的真实状态
-            onCommitted()
         }
     }
 

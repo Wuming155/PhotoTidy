@@ -27,6 +27,14 @@ import kotlinx.coroutines.launch
 /** 系统回收站一次加载多少张。 */
 private const val TRASH_PAGE_SIZE = 200
 
+/**
+ * 合成相册（系统标准目录）bucketId 的哨兵区间起点。
+ *
+ * 真实 BUCKET_ID 是 int32 的路径哈希，永远落在 Int32 表示范围内；
+ * 从 [Long.MIN_VALUE] 起步的区间与它数学上无交，合成 id 不可能与真实相册撞车。
+ */
+private const val SYNTHETIC_BUCKET_BASE = Long.MIN_VALUE + 1L
+
 data class LibraryUiState(
     /**
      * null 表示「还没判定」。
@@ -242,7 +250,10 @@ class LibraryViewModel(
         val excludeBucket = (currentScope as? MediaScope.Album)?.bucketId
         val fromDevice = existing.filter { it.bucketId != excludeBucket }
 
-        // 补上系统标准目录，即使用户还没有照片放进去，也允许把照片归到这些位置
+        // 补上系统标准目录，即使用户还没有照片放进去，也允许把照片归到这些位置。
+        // bucketId 落在 Int32 表示范围之外的哨兵区间：真实 BUCKET_ID 本质是 int32 的
+        // 路径哈希，完全可能为负 —— 任何按名字算出来的负 id 都有概率与真实相册撞车，
+        // 撞上会让快捷移动条（LazyRow 按 bucketId 做 key）直接因 key 重复而崩溃。
         val standard = listOf(
             res.getString(R.string.album_camera) to "DCIM/Camera",
             res.getString(R.string.album_screenshots) to "Pictures/Screenshots",
@@ -250,9 +261,9 @@ class LibraryViewModel(
         )
         val missing = standard
             .filterNot { (name, _) -> fromDevice.any { it.name == name } }
-            .map { (name, path) ->
+            .mapIndexed { index, (name, path) ->
                 MediaAlbum(
-                    bucketId = -name.hashCode().toLong(),
+                    bucketId = SYNTHETIC_BUCKET_BASE + index,
                     name = name,
                     relativePath = path,
                     count = 0,

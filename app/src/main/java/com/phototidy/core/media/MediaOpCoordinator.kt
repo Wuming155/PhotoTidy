@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.resume
 
 /**
@@ -43,8 +45,18 @@ class MediaOpCoordinator(private val strings: StringProvider) {
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
-    /** 正在等用户做选择的那一次授权。同一时刻只允许一个。 */
+    /** 正在等用户做选择的那一次授权。同一时刻只允许一个 —— 由 [gate] 保证。 */
     private var waiting: CancellableContinuation<Boolean>? = null
+
+    /**
+     * 一次只放一个写操作进来，直到它的授权流程走完（含等用户在系统框上做选择）。
+     *
+     * 协调器是进程级单例，整理会话的提交与回收站页的还原/删除共用它。
+     * 没有这道闸时，两路并发触发授权会互相覆盖 [waiting]：后到者把先到者
+     * `cancel()` 掉，而那条被取消的调用链拿不到任何「被跳过」的通知。
+     * 串行化之后并发触发只会排队 —— 先到者把授权走完，后到者再开始。
+     */
+    private val gate = Mutex()
 
     /**
      * 执行一次媒体写操作，必要时等用户授权。
@@ -68,6 +80,9 @@ class MediaOpCoordinator(private val strings: StringProvider) {
      *
      * [op] 会收到「这是第几次尝试」（从 0 起），便于上层区分
      * 「还没拿到任何授权」和「已经拿到写授权」。
+     *
+     * 整个流程（含等待授权的挂起期）持有 [gate]，并发调用会在此排队；
+     * 重试用循环而不是递归 —— Mutex 不可重入，递归重试会在重入时死锁。
      */
     suspend fun runStaged(
         successMessage: String,
@@ -75,34 +90,39 @@ class MediaOpCoordinator(private val strings: StringProvider) {
         onFailure: (suspend (String) -> Unit)? = null,
         consentBudget: Int,
         op: suspend (attempt: Int) -> MediaOpResult,
-    ) = execute(successMessage, onSuccess, onFailure, attempt = 0, budget = consentBudget, op = op)
-
-    private suspend fun execute(
-        successMessage: String,
-        onSuccess: (suspend () -> Unit)?,
-        onFailure: (suspend (String) -> Unit)?,
-        attempt: Int,
-        budget: Int,
-        op: suspend (Int) -> MediaOpResult,
     ) {
-        when (val result = op(attempt)) {
-            is MediaOpResult.Success -> {
-                onSuccess?.invoke()
-                emit(successMessage)
-            }
+        gate.withLock {
+            var attempt = 0
+            while (true) {
+                when (val result = op(attempt)) {
+                    is MediaOpResult.Success -> {
+                        onSuccess?.invoke()
+                        emit(successMessage)
+                        return
+                    }
 
-            is MediaOpResult.Failed -> report(onFailure, result.message)
+                    is MediaOpResult.Failed -> {
+                        report(onFailure, result.message)
+                        return
+                    }
 
-            is MediaOpResult.NeedsConsent -> when {
-                attempt >= budget -> report(
-                    onFailure,
-                    strings.get(R.string.media_op_budget_exhausted),
-                )
+                    is MediaOpResult.NeedsConsent -> when {
+                        attempt >= consentBudget -> {
+                            report(
+                                onFailure,
+                                strings.get(R.string.media_op_budget_exhausted),
+                            )
+                            return
+                        }
 
-                awaitConsent(result.intentSender) ->
-                    execute(successMessage, onSuccess, onFailure, attempt + 1, budget, op)
+                        awaitConsent(result.intentSender) -> attempt += 1
 
-                else -> report(onFailure, strings.get(R.string.media_op_consent_denied))
+                        else -> {
+                            report(onFailure, strings.get(R.string.media_op_consent_denied))
+                            return
+                        }
+                    }
+                }
             }
         }
     }
@@ -115,10 +135,9 @@ class MediaOpCoordinator(private val strings: StringProvider) {
     /** 挂起直到用户在系统框上做出选择；没有订阅者时立即返回 false。 */
     private suspend fun awaitConsent(sender: IntentSender): Boolean =
         suspendCancellableCoroutine { continuation ->
-            // 正常路径下 execute() 会等 awaitConsent 完全返回后才递归，所以走到这里时 waiting 必为 null。
-            // 但若将来调用方并发发起授权（例如单会话 UI 同时触发两次），cancel 会直接取消上一个等待协程，
-            // 而它整条调用链没有 onFailure 通知 —— 调用方可能收不到「被跳过」的信号。
-            // 这是已知隐患，单会话 UI 当前触发不到，留此警示。
+            // [gate] 已把授权流程串行化：走到这里时必然没有别的等待者，
+            // waiting 必为 null。下面的 cancel 只是防御性兜底 —— 若未来有人
+            // 绕过 gate 调到这里，宁可取消上一个等待者也不能让槽位被覆盖后泄漏。
             waiting?.cancel()
             waiting = continuation
             val delivered = _consent.tryEmit(IntentSenderRequest.Builder(sender).build())
