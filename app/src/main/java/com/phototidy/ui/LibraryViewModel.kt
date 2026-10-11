@@ -13,6 +13,7 @@ import com.phototidy.core.media.MediaOpCoordinator
 import com.phototidy.core.media.MediaStoreRepository
 import com.phototidy.core.media.SessionStore
 import com.phototidy.core.media.StagingTrash
+import com.phototidy.core.media.isImageDestinationLegal
 import com.phototidy.core.model.MediaAlbum
 import com.phototidy.core.model.MediaImage
 import com.phototidy.core.model.MediaScope
@@ -257,7 +258,11 @@ class LibraryViewModel(
 
     /** 整理页里可选的「移动目标」：所有相册 + 系统标准目录。 */
     fun moveTargets(currentScope: MediaScope): List<MediaAlbum> {
-        val existing = _state.value.albums.filter { it.canReceive }
+        // 只留图片真正落得进去的相册：MediaProvider 只接受 DCIM/ 与 Pictures/ 两棵子树。
+        // 把 Download/ 这类目录列成目标，用户滑一下、排好队、点提交，换来的是一句
+        // 系统异常 —— 目标从一开始就不可能达成，就不该出现在这里。
+        val existing = _state.value.albums
+            .filter { it.canReceive && isImageDestinationLegal(it.relativePath) }
         val excludeBucket = (currentScope as? MediaScope.Album)?.bucketId
         val fromDevice = existing.filter { it.bucketId != excludeBucket }
 

@@ -11,6 +11,7 @@ import com.phototidy.R
 import com.phototidy.core.media.MediaOpCoordinator
 import com.phototidy.core.media.MediaRepository
 import com.phototidy.core.media.computeTargetPath
+import com.phototidy.core.media.isImageDestinationLegal
 import com.phototidy.core.media.SessionStore
 import com.phototidy.core.media.StagingTrash
 import com.phototidy.core.model.MediaAlbum
@@ -285,6 +286,9 @@ class ReviewViewModel(
                             strings.get(R.string.commit_moved, moves.size)
                         },
                         onSuccess = { moves.forEach { move -> pendingMoves.remove(move.imageId) } },
+                        // 失败之后必须对账：批量直写是逐条进行的，失败之前那几张可能已经落库，
+                        // 而队列里还可能留着永远不可能完成的项 —— 见 [dropUnreachableMoves]。
+                        onFailure = { _ -> dropUnreachableMoves() },
                     ) { repo.moveToAlbums(moves) }
                 }
 
@@ -429,6 +433,13 @@ class ReviewViewModel(
     /**
      * 冷启动恢复：落盘的只有 id，回 MediaStore 换回照片。
      * 期间已被删除的照片不会出现在结果里，于是自然被剔除，不需要额外的失效判定。
+     *
+     * 另外两类也必须在这里剔除 —— 它们会让队列**永久卡死**：提交按钮一直亮着，
+     * 用户每次点提交都撞同一堵墙，而队列一条都清不掉。
+     *  · 照片已经躺在目标目录里：这次移动其实早就完成了（提交中途被杀进程就会留下这种队列）。
+     *  · 落点被系统禁止：老版本会把 `Download/` 这类目录当成移动目标，而 MediaStore 对图片
+     *    只接受 `DCIM/` 与 `Pictures/` 两棵子树（见 [isImageDestinationLegal]），
+     *    重试多少次都是同一句报错。
      */
     private fun restorePendingMoves() {
         val snapshot = session.loadPendingMoves(scope.key)
@@ -437,15 +448,70 @@ class ReviewViewModel(
             val byId = runCatching { repo.imagesByIds(snapshot.map { it.imageId }) }
                 .getOrDefault(emptyList())
                 .associateBy { it.id }
+            var unreachable = 0
             snapshot.forEach { move ->
                 val image = byId[move.imageId] ?: return@forEach
+                if (isAtTarget(image, move)) return@forEach
+                if (!isImageDestinationLegal(move.targetPath)) {
+                    unreachable++
+                    return@forEach
+                }
                 pendingMoves[move.imageId] = move
                 history.addLast(ReviewRecord(image, ReviewAction.Move, targetAlbum = move.albumName))
                 processedCount++
             }
+            if (unreachable > 0) {
+                ops.emit(strings.get(R.string.commit_move_target_skipped, unreachable))
+            }
+            // 剔除的结果必须落盘，否则下次冷启动又把它们捞回来
+            persist()
             syncState()
         }
     }
+
+    /**
+     * 提交失败之后对账，把队列里两类「再排下去也没意义」的项摘掉：
+     *  · 已经真的落到目标目录的 —— 批量直写是逐条进行的，失败之前的那几条可能早已落库；
+     *  · 落点被系统禁止的 —— 重试一万次也只会得到同一句报错。
+     *
+     * 不做这一步的话，[ReviewUiState.hasPending] 永远为真：提交按钮一直亮着、
+     * 每次点提交都重新撞上同一个必失败的项，队列却一条也清不掉。
+     */
+    private suspend fun dropUnreachableMoves() {
+        if (pendingMoves.isEmpty()) return
+        val byId = runCatching { repo.imagesByIds(pendingMoves.keys.toList()) }
+            .getOrDefault(emptyList())
+            .associateBy { it.id }
+        var dropped = 0
+        var unreachable = 0
+        pendingMoves.entries.removeAll { (id, move) ->
+            val image = byId[id]
+            when {
+                image != null && isAtTarget(image, move) -> {
+                    dropped++
+                    true
+                }
+
+                !isImageDestinationLegal(move.targetPath) -> {
+                    dropped++
+                    unreachable++
+                    true
+                }
+
+                else -> false
+            }
+        }
+        if (dropped == 0) return
+        if (unreachable > 0) {
+            ops.emit(strings.get(R.string.commit_move_target_skipped, unreachable))
+        }
+        persist()
+        syncState()
+    }
+
+    /** 照片是否已经在这次移动的目标目录里了（路径收尾的斜杠无关紧要）。 */
+    private fun isAtTarget(image: MediaImage, move: PendingMove): Boolean =
+        image.relativePath.trim('/') == move.targetPath.trim('/')
 
     companion object {
         private const val TAG = "ReviewViewModel"

@@ -9,6 +9,7 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
+import android.util.Log
 import com.phototidy.R
 import com.phototidy.core.StringProvider
 import com.phototidy.core.model.MediaAlbum
@@ -483,9 +484,21 @@ class MediaStoreRepository(
         request: (List<Uri>) -> IntentSender,
     ): MediaOpResult = when {
         denied.isEmpty() && firstError == null -> MediaOpResult.Success
-        denied.isEmpty() -> MediaOpResult.Failed(firstError ?: strings.get(R.string.media_op_failed))
+        denied.isEmpty() -> {
+            // ⚠️ 平台原文不能直接当提示语弹给用户。
+            // `Failed(firstError)` 曾把这句话原样送上 Snackbar：
+            // 「Primary directory Download not allowed for content://media/external_primary/
+            //   images/media/228; allowed directories are [DCIM, Pictures]」——
+            // 一句英文系统异常，用户既看不懂也不知道该做什么。
+            // 原文留给日志排查，界面只给本地化的一句。
+            Log.w(TAG, "update rejected: $firstError")
+            MediaOpResult.Failed(strings.get(R.string.media_op_failed))
+        }
         else -> runCatching { MediaOpResult.NeedsConsent(request(denied), kind) }
-            .getOrElse { MediaOpResult.Failed(it.message ?: strings.get(R.string.media_op_consent_request_failed)) }
+            .getOrElse {
+                Log.w(TAG, "consent request failed", it)
+                MediaOpResult.Failed(strings.get(R.string.media_op_consent_request_failed))
+            }
     }
 
     /**
@@ -513,6 +526,8 @@ class MediaStoreRepository(
     }
 
     private companion object {
+        const val TAG = "MediaStoreRepository"
+
         const val VISIBLE =
             "COALESCE(${MediaStore.MediaColumns.IS_PENDING}, 0) = 0 AND " +
                 "${MediaStore.MediaColumns.SIZE} > 0"
@@ -575,27 +590,51 @@ internal fun monthWindowAt(epochMillis: Long, zone: ZoneId): MonthWindow {
     )
 }
 
+/** 共享存储里图片唯一被允许的两棵顶层子树之一（另一棵是 `DCIM`）。 */
+private const val IMAGE_ROOT = "Pictures"
+
+/**
+ * 这个相对路径是不是图片的**合法落点**。
+ *
+ * MediaProvider 对 `RELATIVE_PATH` 有硬校验：图片只能落在 `DCIM/` 或 `Pictures/` 之下，
+ * 其余顶层目录（`Download/`、`Android/`…）一律拒绝。实机报错原文：
+ *
+ * ```
+ * java.lang.IllegalArgumentException: Primary directory Download not allowed for
+ * content://media/external_primary/images/media/228; allowed directories are [DCIM, Pictures]
+ * ```
+ *
+ * 所以「把照片移到 Download 相册」在这套 API 下是**不可能完成**的 —— 这种目标一开始就不该
+ * 出现在移动目标里（见 `LibraryViewModel.moveTargets`），也不该被排进队列。
+ *
+ * 大小写不敏感比较：`RELATIVE_PATH` 直接来自 MediaStore，反映设备上的真实目录，
+ * 不该因为设备把它写成 `dcim/` 就把整个相册判成不能收照片。
+ */
+fun isImageDestinationLegal(relativePath: String): Boolean {
+    val top = relativePath.trim('/').substringBefore('/')
+    return top.equals("DCIM", ignoreCase = true) || top.equals(IMAGE_ROOT, ignoreCase = true)
+}
+
 /**
  * 计算落点目录。
  *
- * 图片只能落在 DCIM 或 Pictures 这两棵子树下，且已有相册要复用它的真实路径（否则会造出一堆重名文件夹）。
+ * 已有相册一律**原样复用它的真实路径**：`relativePath` 就是这批照片所在的目录，
+ * 而落点必须在**入队时**就定下来（排队阶段）、不能等到提交时再算 ——
+ * 否则「会话中途相册被别的应用改名」会让排好的队指向别处。
  *
- * 刻意做成**顶层纯函数**：落点必须在**入队时**就定下来（排队阶段）而不是提交时，
- * 否则「会话中途相册被别的应用改名」会让排好的队指向别处；
- * 做成纯函数也方便单测，不依赖 [MediaStoreRepository] 持有的 `Context`。
+ * 这里曾经用「相册名是不是路径后缀」来决定能否复用。桶名是系统给的**显示名**，
+ * 会随系统语言变：中文 ROM 上 `DCIM/Camera` 的桶名是「相机」，后缀匹配不上，
+ * 于是转而在同一棵树下另建 `DCIM/相机/` —— 同一个相册被劈成两个，
+ * 照片在系统相册里凭空多出一栏。现在只看路径本身是否合法。
  *
- * 复用时走大小写不敏感匹配（[String.endsWith] 的 ignoreCase）：
- * 当 `relativePath` 是 `DCIM/camera/`（小写）而相册名是 `Camera`（大写）时，
- * 若用大小写敏感判断会误判为「没有现成目录」而新建 `DCIM/Camera/`，
- * 与原有目录形成异大小写重名 —— 在 FAT / 类 FAT 文件系统上会出问题。
+ * 不合法（`Download/` 这类）时退到标准根目录下按名字建目录：宁可换个位置，
+ * 也不能产出一个必然被系统拒绝的落点。
+ *
+ * 做成**顶层纯函数**是为了让这些规则能在 JVM 单测里直测，不依赖 `Context`。
  */
 fun computeTargetPath(album: MediaAlbum): String {
     val existing = album.relativePath.trim('/')
-    if (existing.isNotBlank() && album.name.isNotBlank() &&
-        existing.endsWith(album.name, ignoreCase = true)
-    ) {
-        return "$existing/"
-    }
-    val root = existing.substringBefore('/').ifBlank { "Pictures" }
-    return "$root/${album.name}/"
+    if (isImageDestinationLegal(existing)) return "$existing/"
+    val name = album.name.trim().trim('/')
+    return if (name.isBlank()) "$IMAGE_ROOT/" else "$IMAGE_ROOT/$name/"
 }

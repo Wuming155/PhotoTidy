@@ -213,6 +213,31 @@ class ReviewViewModelTest {
     }
 
     @Test
+    fun `restore drops moves the system can never honour, and keeps the rest`() {
+        // 老版本会把 Download/ 当移动目标，而 MediaStore 只让图片落在 DCIM/ 与 Pictures/ 之下 ——
+        // 这种项重试多少次都是同一句报错。再叠上「批量直写是逐条进行的、失败之前那几条可能已落库」，
+        // 队列就会卡成「一提交就报错，却永远清不掉」。恢复时就得把这两类无用项摘掉。
+        val session = FakeSessionStore()
+        session.savePendingMoves(
+            MediaScope.Recent.key,
+            listOf(
+                // 已经躺在目标目录里：这次移动其实早就完成了
+                PendingMove(1L, "DCIM/A/", "A", 1L, "DCIM/A"),
+                // 落点被系统禁止，永远不可能成功
+                PendingMove(2L, "Download/", "Download", 3L, "Download"),
+                // 这条才是真欠着的
+                PendingMove(3L, "DCIM/B/", "B", 2L, "DCIM/B"),
+            ),
+        )
+        val images = mapOf(1L to makeImage(1L), 2L to makeImage(2L), 3L to makeImage(3L))
+        val vm = makeVm(session = session, repo = FakeMediaRepository(images = images))
+
+        assertEquals(1, vm.state.value.pendingMoveCount)
+        // 摘掉的结果必须落盘，否则下次冷启动又把它们捞回来
+        assertEquals(listOf(3L), session.loadPendingMoves(MediaScope.Recent.key).map { it.imageId })
+    }
+
+    @Test
     fun `window refills from the next page before running dry`() {
         // 分页补窗是「翻到第 8 万张也不停顿」的保证：第一页滑穿之前下一页必须已在内存里；
         // 页取不满说明数据源到头了，标记耗尽后不能再发起第三次请求。
