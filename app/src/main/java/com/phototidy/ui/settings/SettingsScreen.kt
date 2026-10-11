@@ -34,6 +34,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -207,6 +211,12 @@ fun SettingsScreen(
 
         item(key = "sensitivity") {
             SettingsCard {
+                // 拖动期间只更新本地草稿：SettingsStore.update 每次提交都会把全部设置键
+                // 重新落盘（SharedPreferences 全量写），逐帧提交等于拖一次滑杆写几十次盘。
+                // 实时预览由 draft 驱动，松手（onValueChangeFinished）才真正提交一次。
+                var sensitivityDraft by remember(settings.swipeSensitivity) {
+                    mutableFloatStateOf(settings.swipeSensitivity)
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = stringResource(R.string.settings_sensitivity_title),
@@ -216,10 +226,10 @@ fun SettingsScreen(
                     )
                     Text(
                         text = when {
-                            settings.swipeSensitivity < 0.85f ->
+                            sensitivityDraft < 0.85f ->
                                 stringResource(R.string.settings_sensitivity_low)
 
-                            settings.swipeSensitivity > 1.25f ->
+                            sensitivityDraft > 1.25f ->
                                 stringResource(R.string.settings_sensitivity_high)
 
                             else -> stringResource(R.string.settings_sensitivity_normal)
@@ -234,8 +244,11 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Slider(
-                    value = settings.swipeSensitivity,
-                    onValueChange = { value -> onUpdate { it.copy(swipeSensitivity = value) } },
+                    value = sensitivityDraft,
+                    onValueChange = { value -> sensitivityDraft = value },
+                    onValueChangeFinished = {
+                        onUpdate { it.copy(swipeSensitivity = sensitivityDraft) }
+                    },
                     valueRange = 0.6f..1.8f,
                     steps = 11,
                     modifier = Modifier.fillMaxWidth(),

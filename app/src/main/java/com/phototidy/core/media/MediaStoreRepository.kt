@@ -112,19 +112,46 @@ class MediaStoreRepository(
         var bytes = 0L
         var newest: MediaImage? = null
 
+        // 月份窗口缓存。游标按拍摄时间倒序，绝大多数行都落在上一次算好的月份区间里，
+        // 只有跨月（以及 DATE_TAKEN 缺失、退化用 DATE_ADDED 的乱序段）才需要重新做时区换算。
+        // 不缓存的话，每一行都要分配 Instant + ZonedDateTime —— 12.5 万张就是几十 MB
+        // 的瞬时垃圾，全砸在冷启动最慢的这条扫描路径上。
+        // 窗口边界与 [MediaScope.filter] 里 Month 条件的 SQL 口径完全一致，行为不变。
+        var windowStart = Long.MAX_VALUE
+        var windowEnd = Long.MIN_VALUE
+        var windowKey = 0
+
         openCursor(selection = VISIBLE, onlyTrashed = false)?.use { c ->
             val cols = Cols(c)
             while (c.moveToNext()) {
                 val taken = c.takenAt(cols)
                 val bucketId = c.getLong(cols.bucket)
                 val size = c.getLong(cols.size)
-                val path = c.getString(cols.path).orEmpty()
 
                 total++
                 bytes += size
                 if (newest == null) newest = c.toImage(cols)
 
+                val key = if (taken >= windowStart && taken < windowEnd) {
+                    windowKey
+                } else {
+                    val dt = Instant.ofEpochMilli(taken).atZone(zone)
+                    val ym = YearMonth.from(dt)
+                    windowKey = ym.year * 100 + ym.monthValue
+                    windowStart = ym.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
+                    windowEnd = ym.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
+                    windowKey
+                }
+                // year * 100 + month 恒可逆：month 只有 1..12
+                val month = months.getOrPut(key) {
+                    MonthAcc(year = key / 100, month = key % 100, cover = c.toImage(cols))
+                }
+                month.count++
+
                 val album = albums.getOrPut(bucketId) {
+                    // RELATIVE_PATH 只有相册的第一行才需要（做名字兜底）——
+                    // 放在循环体里读的话，每一行都要为一个用不上的值分配一个字符串
+                    val path = c.getString(cols.path).orEmpty()
                     AlbumAcc(
                         name = c.albumName(cols).ifBlank { path.trim('/').substringBefore('/') },
                         path = path,
@@ -132,11 +159,6 @@ class MediaStoreRepository(
                     )
                 }
                 album.count++
-
-                val dt = Instant.ofEpochMilli(taken).atZone(zone)
-                val key = dt.year * 100 + dt.monthValue
-                val month = months.getOrPut(key) { MonthAcc(dt.year, dt.monthValue, c.toImage(cols)) }
-                month.count++
             }
         }
 

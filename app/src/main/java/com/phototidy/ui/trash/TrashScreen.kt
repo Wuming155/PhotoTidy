@@ -39,6 +39,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.neverEqualPolicy
@@ -115,10 +116,30 @@ fun TrashScreen(
     /** 正在进行的划选按哪种模式作用；null = 没有在划选。 */
     var paint by remember { mutableStateOf<PaintMode?>(null) }
 
-    val selection = systemTrash.filter { it.id in selectedIds }
+    /**
+     * 选中状态的高频写入口是划选：拖动期间每个事件帧都在改 [selectedIds]。
+     *
+     * 刻意**不**在组合期把选中的照片 filter 成一份列表 —— 那会让本函数每个拖动帧
+     * 都做一次 O(n) 扫描 + 列表分配，且整页跟着每帧重组。这里只派生一个计数，
+     * 完整列表推迟到点击「还原 / 彻底删除」那一刻再算（见 [selectedList]）。
+     * derivedStateOf 只在结果真的变化时才通知读者：手指划过已选中的区域时，
+     * set 变了但计数没变，动作条不会重组。
+     */
+    val selectedCount by remember(systemTrash) {
+        derivedStateOf { systemTrash.count { it.id in selectedIds } }
+    }
     val hasMore = systemTrash.size < trashCount
     val allLoaded = systemTrash.size >= trashCount
-    val allSelected = allLoaded && systemTrash.isNotEmpty() && systemTrash.all { it.id in selectedIds }
+    // 「全选了吗」的检查本身是 O(n)：不派生的话，这个检查会把每帧的选中写入
+    // 都放大成整页重组
+    val allSelected by remember(systemTrash, trashCount) {
+        derivedStateOf {
+            allLoaded && systemTrash.isNotEmpty() && systemTrash.all { it.id in selectedIds }
+        }
+    }
+
+    /** 完整的选中列表只在事件回调里需要：点击时现算，不进组合期。 */
+    fun selectedList(): List<MediaImage> = systemTrash.filter { it.id in selectedIds }
 
     /** 把当前手指命中的格子按划选模式处理。 */
     fun paintAt(root: Offset) {
@@ -217,9 +238,14 @@ fun TrashScreen(
             }
         } else {
             items(items = systemTrash, key = { "y-${it.id}" }) { image ->
+                // 每格只订阅「自己这一格」的选中值。划选每帧改的是 selectedIds 整体，
+                // 让格子直读这个集合的话，所有可见格子会逐帧重组（3 列 × 十来行，
+                // 60~120fps 下是低端机的滚动/划选杀手）。derivedStateOf 把失效收窄到
+                // 选中值真正翻转的那几格，并且惰性求值 —— 不在屏上的格子不参与重算。
+                val selected by remember(image.id) { derivedStateOf { image.id in selectedIds } }
                 TrashTile(
                     image = image,
-                    selected = image.id in selectedIds,
+                    selected = selected,
                     onClick = { selectedIds = selectedIds.toggle(image.id) },
                     onBounds = { rect -> tileBounds[image.id] = rect },
                     onDisposed = { tileBounds.remove(image.id) },
@@ -233,12 +259,12 @@ fun TrashScreen(
             }
             item(key = "actions", span = { GridItemSpan(maxLineSpan) }) {
                 SystemTrashActions(
-                    selectedCount = selection.size,
+                    selectedCount = selectedCount,
                     onRestore = {
-                        onRestore(selection)
+                        onRestore(selectedList())
                         selectedIds = emptySet()
                     },
-                    onDelete = { confirmDelete = selection },
+                    onDelete = { confirmDelete = selectedList() },
                 )
             }
         }

@@ -55,6 +55,9 @@ class SettingsStore(context: Context) {
 
     fun update(transform: (AppSettings) -> AppSettings) {
         val next = transform(_state.value)
+        // 值没变就不写：调用方可能高频带着「整体 copy」进来（比如设置页的滑杆），
+        // 而 SharedPreferences 的每次提交都是全量落盘
+        if (next == _state.value) return
         _state.value = next
         prefs.edit {
             putString(KEY_THEME, next.themeMode.name)

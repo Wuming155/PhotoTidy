@@ -17,6 +17,7 @@ import com.phototidy.core.model.MediaAlbum
 import com.phototidy.core.model.MediaImage
 import com.phototidy.core.model.MediaScope
 import com.phototidy.core.model.MonthGroup
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -110,7 +111,13 @@ class LibraryViewModel(
         if (!_state.value.canRead) return
         viewModelScope.launch {
             _state.update { it.copy(loading = true) }
-            val overview = runCatching { repo.loadOverview() }
+            // 概览（全表扫描）、回收站计数、回收站首页三路查询互不依赖，并行取：
+            // 大库上刷新耗时从「三者之和」收敛为「最慢的一个」。
+            val overviewDeferred = async { runCatching { repo.loadOverview() } }
+            val trashCountDeferred = async { runCatching { repo.countTrashed() } }
+            val firstPageDeferred = async { runCatching { repo.pageTrashed(0, TRASH_PAGE_SIZE) } }
+
+            val overview = overviewDeferred.await()
                 .onFailure {
                     // 必须说出来。以前这里只往一个没人读的字段里塞文案，
                     // 结果扫描失败对用户完全静默 —— 看起来就像「照片全没了」。
@@ -120,9 +127,8 @@ class LibraryViewModel(
                 }
                 .getOrNull() ?: return@launch
 
-            val trashCount = runCatching { repo.countTrashed() }.getOrDefault(0)
-            val firstPage = runCatching { repo.pageTrashed(0, TRASH_PAGE_SIZE) }
-                .getOrDefault(emptyList())
+            val trashCount = trashCountDeferred.await().getOrDefault(0)
+            val firstPage = firstPageDeferred.await().getOrDefault(emptyList())
 
             _state.update {
                 it.copy(
@@ -198,7 +204,12 @@ class LibraryViewModel(
             if (images.isEmpty()) {
                 session.clearStaging()
             } else {
-                staging.restore(images.sortedBy { ids.indexOf(it.id) })
+                // 排队顺序必须还原（落盘只有 id，回库后按原次序排回）。
+                // 先建一次 id→序号 的索引：逐张 ids.indexOf 是 O(n²)，千张规模的
+                // 暂存队列在主线程上要白做几百万次比较 —— 而这段跑在冷启动路径上。
+                val order = HashMap<Long, Int>(ids.size * 2)
+                ids.forEachIndexed { index, id -> order[id] = index }
+                staging.restore(images.sortedBy { order[it.id] ?: Int.MAX_VALUE })
             }
         }
     }
