@@ -2,6 +2,7 @@ package com.phototidy.ui
 
 import android.content.res.Resources
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -332,7 +333,8 @@ class LibraryViewModel(
                 // 暂存队列在主线程上要白做几百万次比较 —— 而这段跑在冷启动路径上。
                 val order = HashMap<Long, Int>(ids.size * 2)
                 ids.forEachIndexed { index, id -> order[id] = index }
-                staging.restore(images.sortedBy { order[it.id] ?: Int.MAX_VALUE })
+                val sorted = images.sortedBy { order[it.id] ?: Int.MAX_VALUE }
+                staging.restore(sorted, pruned = images.size != ids.size)
             }
         }
     }
@@ -383,6 +385,7 @@ class LibraryViewModel(
                 onSuccess = {
                     // 已经做过决定：进回收站的照片不该再回到整理队列
                     images.forEach { reviewed.mark(it.id) }
+                    reviewed.flush()
                     // 就地收敛剩下的组，不再重扫一遍全库 —— 用户刚刚才看过这些结果
                     _state.update { state ->
                         state.copy(
@@ -495,6 +498,7 @@ class LibraryViewModel(
                 // 会永远排不进整理队列，用户再也没法决定它们。
                 onSuccess = {
                     reviewed.unmark(images.map { it.id })
+                    reviewed.flush()
                     refresh()
                 },
                 consentBudget = 1,
@@ -511,6 +515,30 @@ class LibraryViewModel(
                 consentBudget = 1,
             ) { attempt -> repo.requestPermanentDelete(images, attempt) }
         }
+    }
+
+    // ------------------------------------------------------ 整理会话 ViewModelStore 生命周期管理
+    /**
+     * 整理会话专用的 ViewModelStore。
+     *
+     * 由 LibraryViewModel 持有，因此在屏幕旋转/窗口调整等配置变更时得以保留；
+     * 当用户主动退出整理页（leaveReview）时由 [clearReviewSession] 清理，
+     * 触发 ReviewViewModel.onCleared() 并释放窗口队列，避免在 Activity 的 ViewModelStore 中堆积。
+     */
+    private var reviewViewModelStore: ViewModelStore? = null
+
+    fun getReviewViewModelStore(): ViewModelStore =
+        reviewViewModelStore ?: ViewModelStore().also { reviewViewModelStore = it }
+
+    fun clearReviewSession() {
+        reviewViewModelStore?.clear()
+        reviewViewModelStore = null
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        reviewViewModelStore?.clear()
+        reviewViewModelStore = null
     }
 
     companion object {

@@ -94,4 +94,21 @@ class DuplicateGroupingTest {
         assertEquals(1, groups.size)
         assertEquals(setOf("a", "b"), groups[0].toSet())
     }
+
+    @Test
+    fun `degenerate fingerprint chaining drift is prevented`() {
+        // 相邻元素差值虽小，但跨度超过阈值时不应形成单一长链合并
+        val groups = groupByFingerprintWithBrightness(
+            listOf(
+                Triple(0L, 0, "dark-1"),
+                Triple(0L, 10, "dark-2"),
+                Triple(0L, 20, "mid-1"),
+                Triple(0L, 30, "mid-2"),
+            ),
+        )
+        // 0 与 10 合并（差 10 <= 16）；20 与 30 合并（差 10 <= 16）；两者不链式混成一组
+        assertEquals(2, groups.size)
+        assertEquals(setOf("dark-1", "dark-2"), groups[0].toSet())
+        assertEquals(setOf("mid-1", "mid-2"), groups[1].toSet())
+    }
 }

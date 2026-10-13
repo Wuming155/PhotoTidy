@@ -55,6 +55,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -219,21 +221,29 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
         // P10 导航层拦截：该入口不是 VM 方法，范围切换按钮虽已在 UI 侧禁用，
         // 已展开的选择器仍可能在提交期间点选；提交期间切换范围会另建 VM 并丢弃在飞提交的上下文。
         if (reviewVmForBack?.state?.value?.submitting == true) return
-        scopeEncoded = MediaScope.encode(scope)
+        val nextEncoded = MediaScope.encode(scope)
+        if (scopeEncoded != nextEncoded) {
+            libraryVm.clearReviewSession()
+            scopeEncoded = nextEncoded
+        }
     }
 
     /**
      * 退出整理页。
      *
-     * 必须做两件事，否则用户会看到那个「滑完 4 张，返回上一级还是 15 张」的现象：
+     * 必须做三件事，否则用户会看到那个「滑完 4 张，返回上一级还是 15 张」的现象：
      *  1. 把「已整理」账本结清（节流窗口里可能还欠着十几条没落盘）；
      *  2. 重扫照片库 —— 首页/相册/范围菜单上的「剩 N 张」全部由概览聚合得出，
      *     不重扫的话它们仍停留在进入整理页之前的数字。
+     *  3. 清理整理会话的 ViewModelStore —— 释放 ReviewViewModel 及其队列内存，
+     *     触发 onCleared()，避免在进程中累积残留。
      */
     fun leaveReview() {
         Graph.reviewedLedger.flush()
         libraryVm.refresh()
+        libraryVm.clearReviewSession()
         scopeEncoded = ""
+        reviewVmForBack = null
     }
 
     // 首次进入整理页自动讲一次手势（只讲一次，之后不再打扰）
@@ -302,7 +312,14 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                     // 「滑完 4 张，数字还是 15」这种看起来完全没生效的现象。
                     val total = libraryVm.scopeCount(reviewScope)
                     val remaining = libraryVm.scopeRemaining(reviewScope)
+                    val reviewStoreOwner = remember(libraryVm) {
+                        object : ViewModelStoreOwner {
+                            override val viewModelStore: ViewModelStore
+                                get() = libraryVm.getReviewViewModelStore()
+                        }
+                    }
                     val reviewVm: ReviewViewModel = viewModel(
+                        viewModelStoreOwner = reviewStoreOwner,
                         key = "review-${reviewScope.key}",
                         factory = ReviewViewModel.factory(
                             scope = reviewScope,

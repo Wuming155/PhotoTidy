@@ -91,18 +91,31 @@ class StagingTrash(
     }
 
     /**
-     * 冷启动恢复：把落盘的 id 换成照片后整队换入。
+     * 冷启动恢复：把落盘的 id 换成照片后换入队列。
      *
-     * 只在队列还是空的时候生效 —— 否则「用户在恢复完成前就已经滑了几张」会被这一下覆盖掉。
-     * 无论是否生效，恢复完成即开门（`restored = true`）；空恢复（`items.isEmpty()`）同样开门，
-     * 否则后续自持落盘会被永久拦截。
+     * 用户在恢复完成前就已经滑入新照片时：合并已恢复项与内存新项（去重并保留两者），
+     * 避免旧暂存被丢弃或新暂存被冲掉；恢复完成即开门（`restored = true`）。
+     * [pruned] 由调用方指明是否在恢复比对时剔除了失效/已删除的 id；为 true 或合并了新项时立即写盘对齐。
      */
-    fun restore(items: List<MediaImage>) {
+    fun restore(items: List<MediaImage>, pruned: Boolean = false) {
         if (items.isEmpty()) {
             restored = true
+            if (pruned) persistStaging()
             return
         }
-        _items.update { current -> if (current.isEmpty()) items else current }
+        var needsPersist = pruned
+        _items.update { current ->
+            if (current.isEmpty()) {
+                items
+            } else {
+                needsPersist = true
+                val existingIds = current.mapTo(HashSet()) { it.id }
+                items.filterNot { it.id in existingIds } + current
+            }
+        }
         restored = true
+        if (needsPersist) {
+            persistStaging()
+        }
     }
 }

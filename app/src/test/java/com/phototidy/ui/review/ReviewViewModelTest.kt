@@ -72,6 +72,8 @@ class ReviewViewModelTest {
         private val images: Map<Long, MediaImage> = emptyMap(),
         /** 非空时 moveToAlbums 直接抛出：模拟 ROM 上意料外的异常（H1）。 */
         private val moveError: Throwable? = null,
+        /** 非空时 imagesByIds 直接抛出：模拟 MediaStore 查询失败。 */
+        private val imagesError: Throwable? = null,
     ) : MediaRepository {
         var moveCalls = 0
         var trashCalls = 0
@@ -84,8 +86,10 @@ class ReviewViewModelTest {
             trashCalls++
             return trashResult
         }
-        override suspend fun imagesByIds(ids: Collection<Long>): List<MediaImage> =
-            ids.mapNotNull { images[it] }
+        override suspend fun imagesByIds(ids: Collection<Long>): List<MediaImage> {
+            imagesError?.let { throw it }
+            return ids.mapNotNull { images[it] }
+        }
     }
 
     private fun makeVm(
@@ -762,5 +766,20 @@ class ReviewViewModelTest {
         assertEquals(99L, vm.state.value.stagedItems.first().id)
         assertTrue(ledger.contains(99L) || !ledger.contains(99L)) // 外部账本不动（未 mark 过）
         assertFalse(ledger.contains(1L))
+    }
+
+    @Test
+    fun `restore pending moves preserves disk snapshot on query exception`() {
+        val session = FakeSessionStore()
+        val move = PendingMove(
+            imageId = 7L, targetPath = "DCIM/B/", albumName = "B",
+            bucketId = 2, albumPath = "DCIM/B",
+        )
+        session.savePendingMoves(MediaScope.Recent.key, listOf(move))
+        val repo = FakeMediaRepository(imagesError = RuntimeException("query failed"))
+        makeVm(session = session, repo = repo)
+
+        // 查询抛异常时，不应将磁盘快照冲刷为空，必须保留待下次重试恢复
+        assertEquals(listOf(7L), session.loadPendingMoves(MediaScope.Recent.key).map { it.imageId })
     }
 }

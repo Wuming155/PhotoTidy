@@ -6,8 +6,11 @@ import android.graphics.ImageDecoder
 import android.util.Log
 import androidx.core.net.toUri
 import com.phototidy.core.model.MediaImage
+import com.phototidy.util.runCatchingUnlessCancelled
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 
 /**
  * 一组重复照片。
@@ -69,15 +72,19 @@ class DuplicateFinder(
         val groups = ArrayList<DuplicateGroup>()
 
         for ((_, ids) in candidates) {
+            coroutineContext.ensureActive()
             if (budget <= 0) break
-            val images = runCatching { repo.imagesByIds(ids) }.getOrDefault(emptyList())
+            val images = runCatchingUnlessCancelled { repo.imagesByIds(ids) }
+                .onFailure { Log.w(TAG, "candidate query failed for ids: $ids", it) }
+                .getOrDefault(emptyList())
             if (images.size < 2) continue
 
             val fingerprinted = ArrayList<Triple<Long, Int, MediaImage>>(images.size)
             for (image in images) {
+                coroutineContext.ensureActive()
                 if (budget <= 0) break
                 budget--
-                val hashed = runCatching { perceptualHashWithLuma(image.uri) }
+                val hashed = runCatchingUnlessCancelled { perceptualHashWithLuma(image.uri) }
                     .onFailure { Log.w(TAG, "hash failed for ${image.id}", it) }
                     .getOrNull() ?: continue
                 fingerprinted += Triple(hashed.first, hashed.second, image)
@@ -95,20 +102,6 @@ class DuplicateFinder(
 
         groups.sortedByDescending { it.wastedBytes }
     }
-
-    /**
-     * 一张照片的 64 位 dHash（仅指纹，不含亮度）。
-     *
-     * 实现细节：
-     *  · `setTargetSize(9, 8)` —— dHash 只需要横向相邻像素的比较，9 列 × 8 行正好给出 64 个比较。
-     *    刻意不按原始宽高比缩放：dHash 的标准做法就是在拉伸后比较，省掉一次几何换算。
-     *  · `ALLOCATOR_SOFTWARE` —— 硬件位图（`ALLOCATOR_HARDWARE`）**读不了像素**，
-     *    `getPixels` 会直接抛异常。这个坑在这里堵死。
-     *  · 用 `use { }` 强制回收 —— 9×8 只有 288 字节，但几百张就是几百次实打实的分配，
-     *    低端机上足以看出内存抖动。
-     */
-    private fun perceptualHash(uriString: String): Long? =
-        perceptualHashWithLuma(uriString)?.first
 
     /**
      * 一张照片的 64 位 dHash + 均值亮度（0..255）。
@@ -213,12 +206,12 @@ internal fun <T> groupByFingerprintWithBrightness(
             out += bucket.map { it.third }
             return@forEach
         }
-        // 退化组：按亮度排序，相邻差 > 容差即断组；每段 ≥2 才算重复。
+        // 退化组：按亮度排序，相对于组起点的跨度 > 容差即断组（防单链串扰漂移）；每段 ≥2 才算重复。
         val sorted = bucket.sortedBy { it.second }
         var start = 0
         for (i in 1..sorted.size) {
             val boundary = i == sorted.size ||
-                sorted[i].second - sorted[i - 1].second > DEGENERATE_LUMA_TOLERANCE
+                sorted[i].second - sorted[start].second > DEGENERATE_LUMA_TOLERANCE
             if (boundary) {
                 if (i - start >= 2) {
                     out += sorted.subList(start, i).map { it.third }

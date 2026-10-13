@@ -61,14 +61,39 @@ class StagingTrashTest {
     }
 
     @Test
-    fun `restore only when empty`() {
-        val store = FakeSessionStore()
-        val trash = StagingTrash(store).apply { markRestored() }
+    fun `restore merges with in-flight items and persists`() {
+        val store = FakeSessionStore().apply { staging = listOf(2L) }
+        val trash = StagingTrash(store)
         trash.stage(img(1))
-        // 队列非空时 restore 不应覆盖用户已经排好的队
-        trash.restore(listOf(img(2)))
+        // 队列非空时 restore 应合并恢复项与内存中先滑入的项（去重），并落盘开门
+        trash.restore(listOf(img(2), img(1)))
+        assertEquals(2, trash.items.value.size)
+        assertEquals(setOf(1L, 2L), trash.items.value.map { it.id }.toSet())
+        assertTrue(trash.restored)
+        assertEquals(listOf(2L, 1L), store.staging)
+    }
+
+    @Test
+    fun `restore empty queue without pruning adopts items without rewriting disk`() {
+        val store = FakeSessionStore().apply { staging = listOf(1L, 2L) }
+        val trash = StagingTrash(store)
+        // 初始为空队列，且未剔除任何项：换入队列并开门，无需多做一次磁盘写入
+        trash.restore(listOf(img(1), img(2)), pruned = false)
+        assertEquals(2, trash.items.value.size)
+        assertTrue(trash.restored)
+        assertEquals(0, store.saves)
+    }
+
+    @Test
+    fun `restore empty queue with pruning persists to align disk`() {
+        val store = FakeSessionStore().apply { staging = listOf(1L, 2L) }
+        val trash = StagingTrash(store)
+        // 发现失效 id 并剔除后（pruned = true）：换入队列、开门，并主动落盘对齐
+        trash.restore(listOf(img(1)), pruned = true)
         assertEquals(1, trash.items.value.size)
-        assertEquals(1L, trash.items.value.first().id)
+        assertTrue(trash.restored)
+        assertEquals(1, store.saves)
+        assertEquals(listOf(1L), store.staging)
     }
 
     @Test

@@ -158,7 +158,7 @@ class MediaStoreRepository(
                     // 放在循环体里读的话，每一行都要为一个用不上的值分配一个字符串
                     val path = c.getString(cols.path).orEmpty()
                     AlbumAcc(
-                        name = c.albumName(cols).ifBlank { path.trim('/').substringBefore('/') },
+                        name = c.albumName(cols).ifBlank { path.trim('/').substringAfterLast('/') },
                         path = path,
                         cover = c.toImage(cols),
                     )

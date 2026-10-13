@@ -65,6 +65,10 @@ class RealSessionStore(context: Context) : SessionStore {
     // ----------------------------------------------------------- 待清除队列（全局）
 
     override fun saveStaging(imageIds: List<Long>) {
+        if (imageIds.isEmpty()) {
+            clearStaging()
+            return
+        }
         prefs.edit { putString(KEY_STAGING, JSONArray(imageIds).toString()) }
     }
 
@@ -77,6 +81,10 @@ class RealSessionStore(context: Context) : SessionStore {
     // ----------------------------------------------------------- 待移动表（按范围）
 
     override fun savePendingMoves(scopeKey: String, moves: List<PendingMove>) {
+        if (moves.isEmpty()) {
+            clearPendingMoves(scopeKey)
+            return
+        }
         val array = JSONArray()
         moves.forEach { move ->
             array.put(

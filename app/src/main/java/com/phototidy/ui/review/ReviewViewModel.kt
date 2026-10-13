@@ -764,9 +764,12 @@ class ReviewViewModel(
         val snapshot = session.loadPendingMoves(scope.key)
         if (snapshot.isEmpty()) return
         viewModelScope.launch {
-            val byId = runCatching { repo.imagesByIds(snapshot.map { it.imageId }) }
-                .getOrDefault(emptyList())
-                .associateBy { it.id }
+            val result = runCatchingUnlessCancelled { repo.imagesByIds(snapshot.map { it.imageId }) }
+            if (result.isFailure) {
+                Log.w(TAG, "restore pending moves query failed for scope ${scope.key}", result.exceptionOrNull())
+                return@launch
+            }
+            val byId = result.getOrNull().orEmpty().associateBy { it.id }
             var unreachable = 0
             snapshot.forEach { move ->
                 val image = byId[move.imageId] ?: return@forEach
@@ -820,9 +823,12 @@ class ReviewViewModel(
      */
     private suspend fun dropUnreachableMoves() {
         if (pendingMoves.isEmpty()) return
-        val byId = runCatching { repo.imagesByIds(pendingMoves.keys.toList()) }
-            .getOrDefault(emptyList())
-            .associateBy { it.id }
+        val result = runCatchingUnlessCancelled { repo.imagesByIds(pendingMoves.keys.toList()) }
+        if (result.isFailure) {
+            Log.w(TAG, "dropUnreachableMoves query failed for scope ${scope.key}", result.exceptionOrNull())
+            return
+        }
+        val byId = result.getOrNull().orEmpty().associateBy { it.id }
         var dropped = 0
         var unreachable = 0
         pendingMoves.entries.removeAll { (id, move) ->
