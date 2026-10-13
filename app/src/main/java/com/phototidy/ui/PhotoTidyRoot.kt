@@ -176,6 +176,18 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
     var reviewVmForBack by remember { mutableStateOf<ReviewViewModel?>(null) }
 
     val reviewScope = MediaScope.decode(scopeEncoded)
+    /**
+     * 是否处于「主壳」——也就是下面 `when` 里那条会组合 [Scaffold] 的分支。
+     *
+     * 主壳 = 非整理页 && 权限已判定 && 可读（`access == null` 时 `canRead` 也必为 false），
+     * 与 `when` 的四个分支一一对应。
+     *
+     * 外层那个 [SnackbarHost] 只在**非主壳**时挂载：两个宿主同时读同一份
+     * [snackbarHostState] 会把同一条消息渲染两遍，而 Compose 的状态读取没有「消费」语义。
+     * 互斥之后主壳内交给 Scaffold 自带的宿主 —— 它会自己把 snackbar 抬到底部栏 / FAB 之上，
+     * 那是外层宿主做不到的（它只能按 `navigationBars` inset 贴底）。
+     */
+    val shellVisible = reviewScope == null && libraryState.canRead
     val currentTab = RootTab.entries.firstOrNull { it.name == tabName } ?: RootTab.Home
     val selectedTab = if (showSettings) RootTab.Settings else currentTab
 
@@ -551,13 +563,16 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
             }
         }
 
-        // snackbar 在整理页也必须可见，所以挂在整个壳的最外层
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .windowInsetsPadding(WindowInsets.navigationBars),
-        )
+        // 主壳之外（整理页 / 权限引导 / 加载态）也必须能弹 snackbar，所以挂在整个壳的最外层 ——
+        // 但只在主壳没组合（没带自己的宿主）时挂，见 [shellVisible]
+        if (!shellVisible) {
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(WindowInsets.navigationBars),
+            )
+        }
     }
 
     if (helpVisible) {

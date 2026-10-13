@@ -43,6 +43,33 @@ class ReviewedBatchCodecTest {
     }
 
     @Test
+    fun `tokens outside the legal id domain are dropped`() {
+        // 合法域是 1..Long.MAX_VALUE。0 与 Long.MIN_VALUE 会让「用符号表意」这个技巧失效
+        // （-0L == 0L，-Long.MIN_VALUE == Long.MIN_VALUE 回绕），一律当损坏 token 丢弃，
+        // 而且不能连累同一批里的合法 id。
+        //
+        // ⚠️ 这三个 token 都**不可能**由 encodeReviewedBatch 产出（`(-0L).toString()` 是 "0"，
+        // Long.MIN_VALUE 也不在 id 域内），所以这里钉的是「读到脏数据时的行为」，不是编码格式。
+        assertEquals(setOf(5L), decode("5 0 -0 ${Long.MIN_VALUE}"))
+        assertEquals(emptySet<Long>(), decode("0"))
+        assertEquals(emptySet<Long>(), decode("-0"))
+        assertEquals(emptySet<Long>(), decode(Long.MIN_VALUE.toString()))
+    }
+
+    @Test
+    fun `the legal domain includes its extremes`() {
+        // 合法区间的上端必须能往返：Long.MAX_VALUE 编码成负数不会回绕
+        assertEquals(
+            setOf(Long.MAX_VALUE),
+            decode(encodeReviewedBatch(listOf(Long.MAX_VALUE), emptyList())),
+        )
+        assertEquals(
+            emptySet<Long>(),
+            decode(encodeReviewedBatch(listOf(Long.MAX_VALUE), listOf(Long.MAX_VALUE))),
+        )
+    }
+
+    @Test
     fun `decoding in order applies removals to earlier batches`() {
         // 冷启动是从第 0 批往后折叠的，跨批次的取消必须能删掉前面批次里的 id
         val out = LinkedHashSet<Long>().also {

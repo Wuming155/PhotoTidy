@@ -264,20 +264,32 @@ class LibraryViewModel(
         val current = _state.value
         if (current.trash.size >= current.trashCount) return 0
         _state.update { it.copy(trashLoadingMore = true, trashLoadError = false) }
-        val next = runCatching { repo.pageTrashed(current.trash.size, TRASH_PAGE_SIZE) }
-            .getOrDefault(emptyList())
-        _state.update {
-            it.copy(
-                trash = it.trash + next,
-                // 取不满一页说明到头了；把真实条数收敛一下，避免滚动到底还在请求
-                trashCount = if (next.size < TRASH_PAGE_SIZE) it.trash.size + next.size else it.trashCount,
-                trashLoadingMore = false,
-                // 期望还有更多却空手而归 = 本次加载失败。置位让 UI 给出重试入口，
-                // 否则 LaunchedEffect(systemTrash.size) 因 size 不变不再触发，spinner 会一直转（见 FYI2）。
-                trashLoadError = next.isEmpty() && it.trash.size < it.trashCount,
-            )
+        try {
+            // 取数不能吞掉取消（用 runCatchingUnlessCancelled 而不是 runCatching）：
+            // 取消被吞成「空页」之后，下面那次 update 会把 trashCount 截断成「已加载的页数」
+            // 并置上 loadError —— 一个还活着的会话会因此以为回收站读完了，
+            // 正是 TrashScreen 里反复警告的「拿一部分冒充全部」。
+            val next = runCatchingUnlessCancelled {
+                repo.pageTrashed(current.trash.size, TRASH_PAGE_SIZE)
+            }.getOrDefault(emptyList())
+            _state.update {
+                it.copy(
+                    trash = it.trash + next,
+                    // 取不满一页说明到头了；把真实条数收敛一下，避免滚动到底还在请求
+                    trashCount = if (next.size < TRASH_PAGE_SIZE) it.trash.size + next.size else it.trashCount,
+                    trashLoadingMore = false,
+                    // 期望还有更多却空手而归 = 本次加载失败。置位让 UI 给出重试入口，
+                    // 否则 LaunchedEffect(systemTrash.size) 因 size 不变不再触发，spinner 会一直转（见 FYI2）。
+                    trashLoadError = next.isEmpty() && it.trash.size < it.trashCount,
+                )
+            }
+            return next.size
+        } finally {
+            // 取消路径上那次 update 会被整段跳过，这里兜住闸门 —— 与 refresh() 的 finally
+            // 同一模式。当前取消等价于 VM 销毁、复位无人可见，这层兜的是将来把这个函数
+            // 挪进更窄作用域时的「永久转圈 + 闸门锁死」。
+            _state.update { it.copy(trashLoadingMore = false) }
         }
-        return next.size
     }
 
     /**

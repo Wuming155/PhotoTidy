@@ -216,11 +216,22 @@ internal fun encodeReviewedBatch(marked: Collection<Long>, unmarked: Collection<
         unmarked.forEach { if (isNotEmpty()) append(' '); append(-it) }
     }
 
-/** [encodeReviewedBatch] 的逆运算。非法 token 直接跳过：单批损坏不该让整个账本读不出来。 */
+/**
+ * [encodeReviewedBatch] 的逆运算。非法 token 直接跳过：单批损坏不该让整个账本读不出来。
+ *
+ * 合法域是 `1..Long.MAX_VALUE`（见上方「照片 id 恒为正数」），两个分支都按区间判定：
+ * `0` 与 `Long.MIN_VALUE` 会让「用符号表意」这个技巧失效（`-0L == 0L`，
+ * `-Long.MIN_VALUE == Long.MIN_VALUE` 回绕），落到它们头上的 token 一律当作损坏丢弃。
+ */
 internal fun decodeReviewedBatch(raw: String, into: MutableSet<Long>) {
     if (raw.isBlank()) return
     raw.split(' ').forEach { token ->
         val value = token.toLongOrNull() ?: return@forEach
-        if (value >= 0L) into.add(value) else into.remove(-value)
+        when (value) {
+            in 1L..Long.MAX_VALUE -> into.add(value)
+            in -Long.MAX_VALUE..-1L -> into.remove(-value)
+            // 越界：0 / Long.MIN_VALUE —— 编码器产不出它们，只可能来自损坏的存储
+            else -> Unit
+        }
     }
 }

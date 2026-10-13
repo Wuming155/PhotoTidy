@@ -35,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -99,9 +100,17 @@ fun DuplicatesScreen(
             .toSet()
     }
 
-    val selectedImages = groups
-        .flatMap { it.images }
-        .filter { it.id in selectedIds }
+    /**
+     * 计数只读选中集的 size（O(1)）—— 点一下格子就是一次 [selectedIds] 写入，
+     * 而这个函数体顶层读一次 `selectedIds` 就会让整页跟着重组。
+     *
+     * 「size 能当计数用」的前提是 `selectedIds ⊆ groups`：由上面那条
+     * [LaunchedEffect] 在 `groups` 被整体替换时收敛，别删它。
+     *
+     * 完整列表只在事件回调里现算（见 `DuplicateActions` 的 `onTrash`），不进组合期 ——
+     * 与 [com.phototidy.ui.trash.TrashScreen] 的 `selectedList()` 是同一套做法。
+     */
+    val selectedCount by remember { derivedStateOf { selectedIds.size } }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -191,8 +200,15 @@ fun DuplicatesScreen(
                 }
                 item(key = "actions") {
                     DuplicateActions(
-                        selectedCount = selectedImages.size,
-                        onTrash = { confirmTrash = selectedImages },
+                        selectedCount = selectedCount,
+                        // 列表在这一刻现算：确认框的标题（「将删除 N 张」）与正文
+                        // （「将释放 X」）都读它，所以必须在**打开弹窗时**就有值，
+                        // 不能推迟到弹窗里的确认键
+                        onTrash = {
+                            confirmTrash = groups
+                                .flatMap { it.images }
+                                .filter { it.id in selectedIds }
+                        },
                     )
                 }
             }
