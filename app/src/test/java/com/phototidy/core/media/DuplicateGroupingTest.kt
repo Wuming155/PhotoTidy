@@ -50,4 +50,48 @@ class DuplicateGroupingTest {
         assertEquals(setOf("a", "b"), groups[0].toSet())
         assertEquals(setOf("c", "d"), groups[1].toSet())
     }
+
+    // ------------------------------------------------------ P5 退化指纹二次校验
+
+    @Test
+    fun `degenerate fingerprint with obvious brightness gap stays separate (P5)`() {
+        // 同一退化指纹（0L）+ 亮度差异明显（纯黑 0 vs 纯白 255）不得合并 ——
+        // 否则不同内容的纯色图只要字节数相同即被报成一组，进入批量回收站确认框。
+        val groups = groupByFingerprintWithBrightness(
+            listOf(
+                Triple(0L, 0, "black"),
+                Triple(0L, 255, "white"),
+            ),
+        )
+        assertTrue(groups.isEmpty())
+    }
+
+    @Test
+    fun `degenerate fingerprint with same brightness still groups (P5 no missed true duplicates)`() {
+        // 真实纯黑/纯白重复废片亮度一致，必须仍能检出 —— 不直接丢弃 0L/-1L 的原因。
+        val groups = groupByFingerprintWithBrightness(
+            listOf(
+                Triple(0L, 0, "black-a"),
+                Triple(0L, 2, "black-b"),
+                Triple(-1L, 255, "white-a"),
+                Triple(-1L, 253, "white-b"),
+            ),
+        )
+        assertEquals(2, groups.size)
+        assertEquals(setOf("black-a", "black-b"), groups[0].toSet())
+        assertEquals(setOf("white-a", "white-b"), groups[1].toSet())
+    }
+
+    @Test
+    fun `non-degenerate fingerprint keeps strict equality (P5 does not loosen Stage1)`() {
+        // 非退化指纹走严格相等，不受亮度影响 —— 守死 Stage 1 单字节精等，绝对不放宽。
+        val groups = groupByFingerprintWithBrightness(
+            listOf(
+                Triple(12345L, 0, "a"),
+                Triple(12345L, 255, "b"),
+            ),
+        )
+        assertEquals(1, groups.size)
+        assertEquals(setOf("a", "b"), groups[0].toSet())
+    }
 }

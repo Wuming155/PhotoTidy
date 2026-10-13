@@ -15,7 +15,7 @@ data class AppSettings(
     val dynamicColor: Boolean = true,
     val pureBlack: Boolean = false,
     val hapticsEnabled: Boolean = true,
-    /** 滑动触发阈值倍率：越小越容易触发（0.6 灵敏 ~ 1.8 迟钝） */
+    /** 灵敏度，越大越灵敏（0.6 稳重 ~ 1.8 灵敏）：阈值按 `基准 / sensitivity` 计算，值越大阈值越小。 */
     val swipeSensitivity: Float = 1.0f,
     /** 整理页是否显示「下一张」的预览堆叠 */
     val showNextPreview: Boolean = true,

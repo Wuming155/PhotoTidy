@@ -680,14 +680,26 @@ class MediaStoreRepository(
             "COALESCE(NULLIF(${MediaStore.MediaColumns.DATE_TAKEN}, 0), " +
                 "${MediaStore.MediaColumns.DATE_ADDED} * 1000)"
 
-        /** 截图目录判据；与 [isScreenshotPath] 的两个前缀必须完全一致。 */
+        /**
+         * 截图目录判据；与 [isScreenshotPath] 的语义必须完全一致（精确匹配 + `/%` 前缀）。
+         *
+         * 务必用双 `LIKE ?`，不要用 `=` / `IN` —— 它们走 BINARY 排序规则，会丢掉现注释
+         * 所依赖的 ASCII 大小写不敏感（见 `MediaScope.Screenshots` 的注释）。
+         * `LIKE '.../%'` 既覆盖目录内文件，也能排除 `ScreenshotsBackup/` 这类前缀污染。
+         */
         const val SCREENSHOT_PATH_CLAUSE =
             "(${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? OR " +
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? OR " +
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? OR " +
                 "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?)"
 
         val SCREENSHOT_PATH_ARGS = arrayOf(
-            "$SCREENSHOT_PATH_PICTURES%",
-            "$SCREENSHOT_PATH_DCIM%",
+            // 兼容无尾斜杠的写入（大小写不敏感，LIKE 对 ASCII 默认不敏感）
+            SCREENSHOT_PATH_PICTURES,
+            // 常见形态：目录内文件 / 子目录
+            "$SCREENSHOT_PATH_PICTURES/%",
+            SCREENSHOT_PATH_DCIM,
+            "$SCREENSHOT_PATH_DCIM/%",
         )
 
         val ID_ONLY = arrayOf(MediaStore.MediaColumns._ID)
@@ -762,6 +774,11 @@ internal const val SCREENSHOT_PATH_DCIM = "DCIM/Screenshots"
  *
  * 大小写不敏感：`RELATIVE_PATH` 反映设备上的真实目录，不该因为设备写成 `pictures/` 就漏掉。
  * 前缀后面必须紧跟 `/` 或到头：否则 `Pictures/ScreenshotsBackup` 也会被误判成截图。
+ *
+ * P3：与生产 SQL 判据（`SCREENSHOT_PATH_CLAUSE` / `SCREENSHOT_PATH_ARGS`）同源 ——
+ * 「精确匹配（无尾斜杠写入）+ `/%` 前缀」两条分别对应 `= 前缀` 与 `LIKE 前缀/%`，
+ * 语义上与双 `LIKE ?` 完全一致。此前该函数全仓只有测试引用，生产走 SQL，
+ * 「前缀必须止于路径边界」的断言保护的是不参与生产的死代码，现已收敛。
  */
 internal fun isScreenshotPath(relativePath: String): Boolean {
     val path = relativePath.trim('/')

@@ -65,12 +65,15 @@ import com.phototidy.ui.components.LibraryImage
  *    比参考实现安全：它的排队改动只活在会话里）；
  *  · 丢弃改动 —— 回滚本次会话的全部决定。
  *
- * 数字直接用 `pendingTotal`（队列派生），UI 不自己数 —— 与完成页、提交确认页同源，
- * 三个页面的数字因此不可能对不上。
+ * P11 口径分离：数字分两套 —— `pendingCount`（全局暂存 + 本范围待移动，用于标题描述），
+ * `discardableCount`（本会话可丢弃，用于丢弃按钮与可用性）。
+ * `discardableCount == 0 && pendingCount > 0` 时暂存项仍有出路（⠇ →「整理中回收站」），
+ * 此时丢弃按钮禁用并显示 `exit_review_no_discardable`。
  */
 @Composable
 internal fun ExitReviewDialog(
     pendingCount: Int,
+    discardableCount: Int = pendingCount,
     onContinue: () -> Unit,
     onKeepAndLeave: () -> Unit,
     onDiscardAndLeave: () -> Unit,
@@ -78,7 +81,19 @@ internal fun ExitReviewDialog(
     AlertDialog(
         onDismissRequest = onContinue,
         title = { Text(stringResource(R.string.exit_review_title)) },
-        text = { Text(stringResource(R.string.exit_review_desc, pendingCount)) },
+        text = {
+            Column {
+                Text(stringResource(R.string.exit_review_desc, pendingCount))
+                if (discardableCount == 0 && pendingCount > 0) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.exit_review_no_discardable),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
         confirmButton = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onKeepAndLeave) {
@@ -87,13 +102,14 @@ internal fun ExitReviewDialog(
                 Spacer(Modifier.width(6.dp))
                 FilledTonalButton(
                     onClick = onDiscardAndLeave,
+                    enabled = discardableCount > 0,
                     shape = MaterialTheme.shapes.extraLarge,
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer,
                         contentColor = MaterialTheme.colorScheme.onErrorContainer,
                     ),
                 ) {
-                    Text(stringResource(R.string.exit_review_discard, pendingCount))
+                    Text(stringResource(R.string.exit_review_discard, discardableCount))
                 }
             }
         },

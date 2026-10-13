@@ -218,7 +218,7 @@ fun ReviewScreen(
                     .padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onClose) {
+                IconButton(onClick = onClose, enabled = !state.submitting) {
                     Icon(
                         Icons.Rounded.Close,
                         contentDescription = stringResource(R.string.cd_exit_review),
@@ -230,6 +230,7 @@ fun ReviewScreen(
                 Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     FilledTonalButton(
                         onClick = { scopePickerOpen = true },
+                        enabled = !state.submitting,
                         shape = MaterialTheme.shapes.extraLarge,
                     ) {
                         Text(
@@ -275,7 +276,9 @@ fun ReviewScreen(
                 }
 
                 Box {
-                    IconButton(onClick = { moreMenuOpen = true }) {
+                    // P10：提交期间顶栏 ⠇ 按钮禁用 —— 菜单内的 staging/defer/restart 都会改队列，
+                    // 而提交只对发起那一刻的快照负责。VM 入口另有兜底网，此处是可见门控。
+                    IconButton(onClick = { moreMenuOpen = true }, enabled = !state.submitting) {
                         Icon(
                             Icons.Rounded.MoreVert,
                             contentDescription = stringResource(R.string.cd_more),
@@ -296,17 +299,19 @@ fun ReviewScreen(
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.menu_staging, state.stagedCount)) },
                             leadingIcon = { Icon(Icons.Rounded.DeleteOutline, null) },
-                            enabled = state.stagedCount > 0,
+                            enabled = state.stagedCount > 0 && !state.submitting,
                             onClick = { moreMenuOpen = false; stagingOpen = true },
                         )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.menu_defer)) },
                             leadingIcon = { Icon(Icons.Rounded.SkipNext, null) },
+                            enabled = !state.submitting,
                             onClick = { moreMenuOpen = false; onDefer() },
                         )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.menu_restart)) },
                             leadingIcon = { Icon(Icons.Rounded.RestartAlt, null) },
+                            enabled = !state.submitting,
                             onClick = { moreMenuOpen = false; onRestart() },
                         )
                     }

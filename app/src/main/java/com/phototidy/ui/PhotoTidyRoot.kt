@@ -190,6 +190,16 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
     val shellVisible = reviewScope == null && libraryState.canRead
     val currentTab = RootTab.entries.firstOrNull { it.name == tabName } ?: RootTab.Home
     val selectedTab = if (showSettings) RootTab.Settings else currentTab
+    // P7：导航单一真源提升到 Scaffold 之外 —— FAB（Scaffold 的 floatingActionButton slot）
+    // 与内容 lambda 不共享局部作用域，此前 destinationKey 声明在内容内部导致 FAB 无法复用，
+    // 只能手写 `currentTab == Home && !showSettings && !showTrash` 并漏掉 showDuplicates。
+    // 现 FAB 与内容同源，均以 destinationKey 判定。
+    val destinationKey = when {
+        showDuplicates -> "duplicates"
+        showTrash -> "trash"
+        showSettings -> "settings"
+        else -> currentTab.name
+    }
 
     fun selectTab(selected: RootTab) {
         // 回收站 / 重复照片都是「次要页面」：点了底部导航的任意一项就该离开它们。
@@ -206,6 +216,9 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
     }
 
     fun openScope(scope: MediaScope) {
+        // P10 导航层拦截：该入口不是 VM 方法，范围切换按钮虽已在 UI 侧禁用，
+        // 已展开的选择器仍可能在提交期间点选；提交期间切换范围会另建 VM 并丢弃在飞提交的上下文。
+        if (reviewVmForBack?.state?.value?.submitting == true) return
         scopeEncoded = MediaScope.encode(scope)
     }
 
@@ -234,7 +247,12 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
     // 系统返回 / 预测性返回：整理页 → 回收站 → 设置页 → 交给系统
     // 整理页里返回不再直接退出：有待提交改动时先问一次（见 ExitReviewDialog）——
     // 退出整理页即保留会话，用户有可能以为自己「取消」了这轮整理。
+    // P10：必须保持 enabled = reviewScope != null，在回调内部静默消费。
+    // 若把 submitting 写进 enabled，返回事件会穿透到 Activity ⇒ finish() ⇒ onDestroy
+    // ⇒ ViewModelStore 清空 ⇒ viewModelScope 取消、在飞的 commit() 被打断在半途
+    // （updateAll 是逐条循环）。静默吞掉无需额外提示 —— 状态行正显示 submittingLabel。
     BackHandler(enabled = reviewScope != null) {
+        if (reviewVmForBack?.state?.value?.submitting == true) return@BackHandler
         if (reviewVmForBack?.state?.value?.hasPending == true) {
             exitConfirmOpen = true
         } else {
@@ -372,9 +390,14 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                     val onDiscardChanges = remember(reviewVm) { reviewVm::discardChanges }
                     // 有待提交改动就先问一次（exitConfirmOpen）；没有就直接退出 ——
                     // 没有任何决定要丢的时候，多一个确认框只是挡路。
-                    val onCloseReview = remember {
+                    // P10：提交期间关闭 X 已在 UI 侧禁用，此处再拦一道，避免已展开的确认框在提交期间点出。
+                    // 直接读 VM 快照而非捕获的 reviewState —— 后者在 remember 无 key 时会停留在首帧。
+                    val onCloseReview = remember(reviewVm) {
                         {
-                            if (reviewState.hasPending) {
+                            val snapshot = reviewVm.state.value
+                            if (snapshot.submitting) {
+                                Unit
+                            } else if (snapshot.hasPending) {
                                 exitConfirmOpen = true
                             } else {
                                 leaveReview()
@@ -414,13 +437,21 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                     if (exitConfirmOpen) {
                         ExitReviewDialog(
                             pendingCount = reviewState.pendingTotal,
+                            discardableCount = reviewState.discardableCount,
                             onContinue = { exitConfirmOpen = false },
                             onKeepAndLeave = {
+                                // P10：提交期间禁止离页 —— 否则 ViewModelStore 清空会取消在飞的 commit()。
+                                // 对话框本身不会在提交期间新弹出（BackHandler/onClose 已拦截），
+                                // 此处仅兜住“先弹框、再提交”的竞态：只关框，不离页。
                                 exitConfirmOpen = false
+                                if (reviewVm.state.value.submitting) return@ExitReviewDialog
                                 leaveReview()
                             },
                             onDiscardAndLeave = {
                                 exitConfirmOpen = false
+                                // discardChanges 自带 submitting 兜底（静默返回），
+                                // 但 leaveReview 必须同样拦截，否则等同于 BackHandler 穿透。
+                                if (reviewVm.state.value.submitting) return@ExitReviewDialog
                                 onDiscardChanges()
                                 leaveReview()
                             },
@@ -462,7 +493,10 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                         }
                     },
                     floatingActionButton = {
-                        if (currentTab == RootTab.Home && !showSettings && !showTrash && libraryState.hasLibrary) {
+                        // P7：以提升后的 destinationKey 为单一真源 —— 此前手写
+                        // `currentTab == Home && !showSettings && !showTrash` 漏了 showDuplicates，
+                        // 导致重复照片页仍浮出与本源无关的「开始整理」按钮。
+                        if (destinationKey == RootTab.Home.name && libraryState.hasLibrary) {
                             ExtendedFloatingActionButton(
                                 onClick = { openScope(MediaScope.Recent) },
                                 icon = { Icon(Icons.Rounded.AutoAwesome, null) },
@@ -484,12 +518,7 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                         // 底部留白由各页面自己的 footer spacer 负责（它们知道 FAB 与导航条的高度）
                         val contentPadding = PaddingValues(top = innerPadding.calculateTopPadding())
 
-                        val destinationKey = when {
-                            showDuplicates -> "duplicates"
-                            showTrash -> "trash"
-                            showSettings -> "settings"
-                            else -> currentTab.name
-                        }
+                        // P7：destinationKey 已提升至 Scaffold 之外（见顶部），此处直接复用，不再重复声明。
                         AnimatedContent(
                             targetState = destinationKey,
                             transitionSpec = { fadeIn() togetherWith fadeOut() },

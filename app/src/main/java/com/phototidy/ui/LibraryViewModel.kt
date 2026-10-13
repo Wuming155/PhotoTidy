@@ -297,16 +297,35 @@ class LibraryViewModel(
      *
      * 只在第一次成功扫描之后做一次；照片在离线期间被删掉的话，
      * [MediaStoreRepository.imagesByIds] 自然查不到，队列里也就不会出现幽灵条目。
+     *
+     * P4a：必须用 [runCatchingUnlessCancelled] 且只有 `Result.success(emptyList)` 时才
+     * `clearStaging()` —— `runCatching` 会把取消吞成空列表，Activity finish / VM clear 时
+     * 恰有一笔在飞的恢复查询会被吞成 `emptyList()`，进而把整份待清除快照永久删掉；
+     * 一次 MediaProvider 重启或权限范围变化造成的瞬时异常同理。失败/取消一律保留快照，
+     * 等下次重试（此处重置 `sessionRestored` 以允许下次成功扫描时重试）。
+     * P4b：恢复前后需开关 `StagingTrash` 的落盘门控，避免恢复完成前被覆写为空。
      */
     private fun restoreSessionOnce() {
         if (sessionRestored) return
         sessionRestored = true
         val ids = session.loadStaging()
-        if (ids.isEmpty()) return
+        if (ids.isEmpty()) {
+            // 无快照也需开门，否则后续 StagingTrash 的自持落盘会被永久拦截。
+            staging.markRestored()
+            return
+        }
         viewModelScope.launch {
-            val images = runCatching { repo.imagesByIds(ids) }.getOrDefault(emptyList())
+            val result = runCatchingUnlessCancelled { repo.imagesByIds(ids) }
+            if (result.isFailure) {
+                // 失败/取消：保留快照等下次重试，本次不开门（P4b 门控继续拦截落盘，
+                // 避免把磁盘上的快照覆写成空），并允许下次成功扫描时重试。
+                sessionRestored = false
+                return@launch
+            }
+            val images = result.getOrNull().orEmpty()
             if (images.isEmpty()) {
                 session.clearStaging()
+                staging.markRestored()
             } else {
                 // 排队顺序必须还原（落盘只有 id，回库后按原次序排回）。
                 // 先建一次 id→序号 的索引：逐张 ids.indexOf 是 O(n²)，千张规模的
@@ -432,6 +451,10 @@ class LibraryViewModel(
         // 补上系统标准目录，即使用户还没有照片放进去，也允许把照片归到这些位置。
         // 去重**按路径**（见 standardDirsMissing）：按名字去重会让同名的真实目录把标准目录挤掉，
         // 结果是一个合法落点反而选不到。标签重名的展示问题由 AlbumQuickMoveBar 补路径解决。
+        // P6：传入未排除的完整列表 `existing` —— 排除当前相册只作用于 `fromDevice`，
+        // 若拿 `fromDevice` 判重，当前相册被排除后会被误判为「缺失」再合成回来，
+        // 结果排出一个目标路径等于当前路径的 PendingMove（提交时幂等写原值并计为成功）。
+        // 传完整列表可同时满足「当前相册不出现在目标里」与「标准目录不被同名真实目录挤掉」。
         // bucketId 落在 Int32 表示范围之外的哨兵区间：真实 BUCKET_ID 本质是 int32 的
         // 路径哈希，完全可能为负 —— 任何按名字算出来的负 id 都有概率与真实相册撞车，
         // 撞上会让快捷移动条（LazyRow 按 bucketId 做 key）直接因 key 重复而崩溃。
@@ -440,7 +463,7 @@ class LibraryViewModel(
             res.getString(R.string.album_screenshots) to "Pictures/Screenshots",
             res.getString(R.string.album_downloads) to "Pictures/Downloads",
         )
-        val missing = standardDirsMissing(fromDevice, standard)
+        val missing = standardDirsMissing(existing, standard)
             .mapIndexed { index, (name, path) ->
                 MediaAlbum(
                     bucketId = SYNTHETIC_BUCKET_BASE + index,

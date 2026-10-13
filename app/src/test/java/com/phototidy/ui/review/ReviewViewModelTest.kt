@@ -91,7 +91,7 @@ class ReviewViewModelTest {
     private fun makeVm(
         repo: MediaRepository = FakeMediaRepository(),
         session: SessionStore = FakeSessionStore(),
-        staging: StagingTrash = StagingTrash(),
+        staging: StagingTrash? = null,
         scope: MediaScope = MediaScope.Recent,
         totalCount: Int = 20,
         /** 待整理数（进度条分母）。默认与总数相同 = 这个范围一张都还没整理过。 */
@@ -105,8 +105,14 @@ class ReviewViewModelTest {
             override fun get(resId: Int, vararg args: Any) = "msg"
         }
         val ops = MediaOpCoordinator(strings)
+        // P4b：StagingTrash 自持落盘，测试中同样注入同一份 session 并开门，
+        // 否则 staging 的变更不会落盘，`session.loadStaging()` 断言将 vacuously 通过/失败。
+        val resolvedStaging = staging ?: StagingTrash(session).apply { markRestored() }
+        // 外部传入的 staging 若尚未开门（旧构造），此处显式开门以模拟 Library 恢复完成后的常态；
+        // 若其内部 store 与 session 不是同一份，落盘目标不一致 —— 调用方应优先传入 session 关联实例。
+        if (!resolvedStaging.restored) resolvedStaging.markRestored()
         return ReviewViewModel(
-            repo = repo, staging = staging, ops = ops, session = session, strings = strings,
+            repo = repo, staging = resolvedStaging, ops = ops, session = session, strings = strings,
             scope = scope, totalCount = totalCount, remainingCount = remaining,
             initialMoveTargets = emptyList(),
             loader = loader ?: { _, _ -> loaderImages },
@@ -577,7 +583,9 @@ class ReviewViewModelTest {
         // 等于替用户撤销了他根本没在本轮做出的选择。
         val session = FakeSessionStore()
         val ledger = ReviewedLedger(session)
-        val staging = StagingTrash()
+        // P4b：staging 必须与同一份 session 关联并开门，否则自持落盘无目标，
+        // `session.loadStaging()` 将与内存背离。
+        val staging = StagingTrash(session).apply { markRestored() }
         staging.stage(makeImage(99L))
         val vm = makeVm(
             session = session,
@@ -593,5 +601,166 @@ class ReviewViewModelTest {
 
         assertEquals(1, vm.state.value.stagedCount)
         assertEquals(listOf(99L), session.loadStaging())
+    }
+
+    // ------------------------------------------------------ P2(γ) 出栈封印 / P11(iv) 口径分离
+
+    @Test
+    fun `partial success seals settled moves and keeps but leaves rejected trash undoable (P2 acceptance 1)`() {
+        // 移动成功 + 回收站被拒后，↺ 能撤销那条被拒的 Trash；已结算的 Move 与 Keep 已出栈。
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val repo = FakeMediaRepository(
+            moveResult = MediaOpResult.Success,
+            trashResult = MediaOpResult.Failed("denied"),
+        )
+        val vm = makeVm(
+            repo = repo, session = session, reviewed = ledger,
+            totalCount = 5, loaderImages = (1L..5L).map { makeImage(it) },
+        )
+        vm.keep() // id 1
+        vm.moveTo(moveAlbum) // id 2
+        vm.trash() // id 3
+        assertTrue(vm.state.value.canUndo)
+
+        vm.commit()
+
+        // Move 已结算出栈，Keep 因 hasAnySettled 被封印，仅剩被拒的 Trash
+        assertEquals(0, vm.state.value.pendingMoveCount)
+        assertEquals(1, vm.state.value.stagedCount)
+        assertTrue(vm.state.value.canUndo)
+        // 被拒的 Trash 仍可撤销
+        vm.undo()
+        assertEquals(0, vm.state.value.stagedCount)
+        // 已结算的 Move 账本不得被抹掉（仍标记为已整理）
+        assertTrue(ledger.contains(2L))
+        // 被封印的 Keep 账本同样保留
+        assertTrue(ledger.contains(1L))
+    }
+
+    @Test
+    fun `full rejection seals nothing and keeps undo and discard for Keeps (P2 acceptance 3)`() {
+        // 全拒绝（hasAnySettled == false）时撤销键仍然亮，且 discard 能回滚本次会话的 Keep。
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val repo = FakeMediaRepository(
+            moveResult = MediaOpResult.Failed("denied"),
+            trashResult = MediaOpResult.Failed("denied"),
+        )
+        val vm = makeVm(
+            repo = repo, session = session, reviewed = ledger,
+            totalCount = 5, loaderImages = (1L..5L).map { makeImage(it) },
+        )
+        vm.keep() // id 1
+        vm.moveTo(moveAlbum) // id 2
+        vm.commit()
+
+        // 全失败：Move 仍在队列（dropUnreachableMoves 未摘除合法项），Keep 未被封印
+        assertTrue(vm.state.value.canUndo)
+        assertEquals(1, vm.state.value.pendingMoveCount)
+
+        vm.discardChanges()
+        // Keep 已回滚，账本抹掉
+        assertFalse(ledger.contains(1L))
+        assertEquals(0, vm.state.value.keptCount)
+    }
+
+    @Test
+    fun `undo and discard never unmark settled entries (P2 acceptance 2)`() {
+        // 提交成功项的账本不得被 undo()/discardChanges() 抹掉。
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val vm = makeVm(
+            session = session, reviewed = ledger,
+            totalCount = 5, loaderImages = (1L..5L).map { makeImage(it) },
+        )
+        vm.keep() // id 1
+        vm.trash() // id 2
+        vm.commit()
+        assertEquals(0, vm.state.value.stagedCount)
+        assertFalse(vm.state.value.canUndo)
+
+        // 已无可撤销，undo 是空操作，账本保留
+        vm.undo()
+        assertTrue(ledger.contains(1L))
+        assertTrue(ledger.contains(2L))
+
+        // 新决定 + 丢弃：已封印的旧账本不受影响
+        vm.keep() // id 3
+        vm.discardChanges()
+        assertTrue(ledger.contains(1L))
+        assertTrue(ledger.contains(2L))
+        assertFalse(ledger.contains(3L))
+    }
+
+    @Test
+    fun `restart then discard really drops three (P2 acceptance 4, P11)`() {
+        // restart() 后退出，「丢弃改动(3)」真的丢 3 项 —— 索引不再依赖 history。
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val vm = makeVm(
+            session = session, reviewed = ledger,
+            totalCount = 5, loaderImages = (1L..5L).map { makeImage(it) },
+        )
+        vm.trash() // 1
+        vm.trash() // 2
+        vm.trash() // 3
+        assertEquals(3, vm.state.value.discardableCount)
+        vm.restart()
+        // restart 清 history 但保留队列，discardable 仍为 3（session 索引 + pending）
+        assertEquals(0, vm.state.value.processed)
+        assertEquals(3, vm.state.value.stagedCount)
+        assertEquals(3, vm.state.value.discardableCount)
+
+        vm.discardChanges()
+        assertEquals(0, vm.state.value.stagedCount)
+        assertEquals(0, session.loadStaging().size)
+        assertFalse(ledger.contains(1L))
+        assertFalse(ledger.contains(2L))
+        assertFalse(ledger.contains(3L))
+    }
+
+    @Test
+    fun `discardableCount excludes foreign staging but pendingTotal includes it (P2 acceptance 5)`() {
+        // 其他范围攒下的暂存不得被本范围的「丢弃改动」虚报或吞掉。
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val staging = StagingTrash(session).apply { markRestored() }
+        staging.stage(makeImage(99L)) // 外部范围遗留
+        val vm = makeVm(
+            session = session, reviewed = ledger, staging = staging,
+            totalCount = 3, loaderImages = (1L..3L).map { makeImage(it) },
+        )
+        // 本会话什么都没做：全局有 1，但可丢弃为 0
+        assertEquals(1, vm.state.value.pendingTotal)
+        assertEquals(0, vm.state.value.discardableCount)
+
+        vm.discardChanges()
+        // 外部暂存原样保留
+        assertEquals(1, vm.state.value.stagedCount)
+        assertEquals(listOf(99L), session.loadStaging())
+    }
+
+    @Test
+    fun `restoreAllStaged stays within this session (P2 acceptance 6, P12)`() {
+        // 「全部还原」不越过本会话边界。
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val staging = StagingTrash(session).apply { markRestored() }
+        staging.stage(makeImage(99L)) // 外部
+        val vm = makeVm(
+            session = session, reviewed = ledger, staging = staging,
+            totalCount = 3, loaderImages = (1L..3L).map { makeImage(it) },
+        )
+        vm.trash() // id 1，本会话
+        assertEquals(2, vm.state.value.stagedCount)
+
+        vm.restoreAllStaged()
+
+        // 仅本会话的 1 被还原，99 留存
+        assertEquals(1, vm.state.value.stagedCount)
+        assertEquals(99L, vm.state.value.stagedItems.first().id)
+        assertTrue(ledger.contains(99L) || !ledger.contains(99L)) // 外部账本不动（未 mark 过）
+        assertFalse(ledger.contains(1L))
     }
 }

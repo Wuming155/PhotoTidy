@@ -165,10 +165,13 @@
     <string name="settings_pure_black_desc">深色主题下用纯黑底，OLED 屏幕更省电</string>
     <string name="settings_section_feel">整理手感</string>
     <string name="settings_sensitivity_title">滑动灵敏度</string>
-    <string name="settings_sensitivity_low">灵敏</string>
-    <string name="settings_sensitivity_high">稳重</string>
+    <!-- P1：保留除法公式（阈值 = 基准 / sensitivity，值越大越灵敏），交换两端文案映射：
+         低值端（0.6）阈值最大、最难触发 →「稳重」；高值端（1.8）阈值最小、最灵敏 →「灵敏」。
+         此前四方不一致（字段名/OS 通用语义/文案/档位映射），低值显示「灵敏」实则最难触发。 -->
+    <string name="settings_sensitivity_low">稳重</string>
+    <string name="settings_sensitivity_high">灵敏</string>
     <string name="settings_sensitivity_normal">标准</string>
-    <string name="settings_sensitivity_desc">调低=轻轻一划就生效；调高=要划得更远才生效（防误触）。</string>
+    <string name="settings_sensitivity_desc">调高=轻轻一划就生效；调低=要划得更远才生效（防误触）。</string>
     <string name="settings_haptics_title">震动反馈</string>
     <string name="settings_haptics_desc">滑到阈值时轻震一下，不用盯着屏幕也知道松手会生效</string>
     <string name="settings_preview_title">显示下一张预览</string>
@@ -208,6 +211,9 @@
     <string name="exit_review_continue">继续整理</string>
     <string name="exit_review_keep">保留退出</string>
     <string name="exit_review_discard">丢弃更改 (%1$d)</string>
+    <!-- P11 口径分离：discardableCount==0 && pendingTotal>0 时暂存项仍有出路（整理中回收站），
+         此时丢弃按钮禁用并给出该提示。数字口径见 ReviewUiState.discardableCount。 -->
+    <string name="exit_review_no_discardable">本次没有待丢弃的改动，其他范围暂存的照片仍在整理中回收站里。</string>
 
     <!-- ============================================================ 整理中新建相册 -->
     <string name="album_new_tile">新相册</string>

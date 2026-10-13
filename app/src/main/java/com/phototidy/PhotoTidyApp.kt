@@ -38,7 +38,7 @@ object Graph {
 
     val settings: SettingsStore by lazy { SettingsStore(appContext) }
 
-    val stagingTrash: StagingTrash by lazy { StagingTrash() }
+    val stagingTrash: StagingTrash by lazy { StagingTrash(sessionStore) }
 
     val sessionStore: SessionStore by lazy { RealSessionStore(appContext) }
 

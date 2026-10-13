@@ -51,6 +51,16 @@ data class ReviewUiState(
     /** 已排队、等提交的「移动」数量 */
     val pendingMoveCount: Int = 0,
     val canUndo: Boolean = false,
+    /**
+     * 本次会话可丢弃的改动数（退出对话框的「丢弃 N 项」口径）。
+     *
+     * 与 [pendingTotal] 回答不同的问题：后者是「全局暂存 + 本范围待移动」（顶栏状态行、提交徽标），
+     * 前者是「本会话送入暂存的 + 本范围待移动 + 本会话 Keep 记录数」。
+     * `history` 同时承担撤销栈与改动索引，`restart()` 会清空它但保留队列，
+     * 跨范围/跨进程的暂存也不属于本次会话 —— 直接拿 `pendingTotal` 当丢弃口径会虚报或吞掉。
+     * 由 `syncState()` 统一赋值，口径见 P11(iv)。
+     */
+    val discardableCount: Int = 0,
     val finished: Boolean = false,
     /** 正在从 MediaStore 取下一窗照片；UI 该显示转圈而不是空卡片 */
     val preparing: Boolean = false,
@@ -176,6 +186,12 @@ class ReviewViewModel(
 
     private val history = ArrayDeque<ReviewRecord>()
 
+    /** 本次会话送入暂存的 id 索引（P11(iv)）：`history` 会被 `restart()` 清空但队列保留，
+     * 跨范围/跨进程的暂存也不属于本次会话，因此丢弃/全部还原不能以 `history` 或全局队列为基座。
+     * 钩子落在唯一收敛点 [restoreStagedInternal]，另覆盖 [trash] 增、`undo` 遇 Trash 减、
+     * `commit` 结算时移除已落盘项。 */
+    private val sessionStagedIds = HashSet<Long>()
+
     /** 已排队但还没提交的移动：照片 id → 待移动记录 */
     private val pendingMoves = LinkedHashMap<Long, PendingMove>()
 
@@ -226,6 +242,9 @@ class ReviewViewModel(
      * 下次会原封不动地重新排队，首页的数字也永远停在「一共有多少张」上。
      */
     fun keep() {
+        // P10 兜底网：可见入口（动作条/手势）均已在 submitting 期间禁用，此处静默返回仅防竞态；
+        // 所有读写都在主线程，无需加锁。本仓库一贯反对静默 no-op，此处是唯一例外且已注释。
+        if (_state.value.submitting) return
         val image = advance() ?: return
         history.addLast(ReviewRecord(image, ReviewAction.Keep))
         reviewed.mark(image.id)
@@ -239,8 +258,11 @@ class ReviewViewModel(
      * 这里**没有**任何文件操作，所以即使连续滑 500 张也不会有一次媒体写入。
      */
     fun trash() {
+        // P10 兜底网：可见入口均已门控，此处仅防提交期间的竞态写入（主线程，无锁）。
+        if (_state.value.submitting) return
         val image = advance() ?: return
         staging.stage(image)
+        sessionStagedIds.add(image.id)
         history.addLast(ReviewRecord(image, ReviewAction.Trash))
         reviewed.mark(image.id)
         processedCount++
@@ -255,6 +277,8 @@ class ReviewViewModel(
      * 排到提交时一次性批量处理，用户全程只需要点一次「允许」。
      */
     fun moveTo(album: MediaAlbum) {
+        // P10 兜底网：可见入口均已门控，此处仅防提交期间的竞态写入（主线程，无锁）。
+        if (_state.value.submitting) return
         val image = advance() ?: return
         pendingMoves[image.id] = PendingMove(
             imageId = image.id,
@@ -275,11 +299,14 @@ class ReviewViewModel(
      * 因为所有动作都还在内存里，撤销就是纯粹的内存回滚 —— 不会产生任何写操作。
      */
     fun undo() {
+        // P10 兜底网：可见入口均已门控，此处仅防提交期间的竞态写入（主线程，无锁）。
+        if (_state.value.submitting) return
         val last = history.removeLastOrNull() ?: return
 
         when (last.action) {
             ReviewAction.Trash -> {
                 staging.unstage(last.image.id)
+                sessionStagedIds.remove(last.image.id)
             }
 
             ReviewAction.Move -> {
@@ -350,6 +377,8 @@ class ReviewViewModel(
      *    已经不在队列里的动作，队列与撤销栈从此对不上。
      */
     fun restoreFromStaging(imageId: Long) {
+        // P10 兜底网：可见入口均已门控，此处仅防提交期间的竞态写入（主线程，无锁）。
+        if (_state.value.submitting) return
         if (staging.items.value.none { it.id == imageId }) return
         restoreStagedInternal(imageId)
         persist()
@@ -358,7 +387,11 @@ class ReviewViewModel(
 
     /** 把排队待清除的整批放回整理队列（对应参考实现的「全部还原」）。 */
     fun restoreAllStaged() {
-        val ids = staging.items.value.map { it.id }
+        // P10 兜底网：可见入口均已门控，此处仅防提交期间的竞态写入（主线程，无锁）。
+        if (_state.value.submitting) return
+        // P12：收敛到本会话索引 —— StagingTrash 是全局队列，遍历它会越过本会话边界，
+        // 把其他范围排队的清除意图一并撤销。借助 P11 的 sessionStagedIds，一行改动。
+        val ids = sessionStagedIds.toList()
         if (ids.isEmpty()) return
         ids.forEach { restoreStagedInternal(it) }
         persist()
@@ -368,6 +401,9 @@ class ReviewViewModel(
     private fun restoreStagedInternal(imageId: Long) {
         val image = staging.items.value.firstOrNull { it.id == imageId } ?: return
         staging.unstage(imageId)
+        // P11(iv)：钩子必须落在此唯一收敛点，不要挂在两个公开入口上 ——
+        // 「全部还原」走前者之外的路径，否则索引会漂移。
+        sessionStagedIds.remove(imageId)
         val wasThisSession = history.removeAll {
             it.action == ReviewAction.Trash && it.image.id == imageId
         }
@@ -383,25 +419,43 @@ class ReviewViewModel(
      * 丢弃本次会话的全部决定，把一切还原到「进入整理页之前」。
      *
      * 这是纯内存回滚：照片库从头到尾没被改动过（改动只在提交时落盘），
-     * 所以不需要任何权限，也不可能丢数据。逆序回滚与逐次 [undo] 完全等价，
-     * 只是不去动窗口 —— 会话马上要结束了，没必要把照片重新排一遍。
+     * 所以不需要任何权限，也不可能丢数据。
      *
-     * 只回滚**本次会话的 history**：暂存队列是全应用共享的（可能含上个会话留下的
-     * 待清除项），那些不属于「本次改动」，不能一起丢掉。
+     * P11(iv)：`history` 同时承担撤销栈与改动索引，`restart()` 会清空它但保留队列，
+     * 跨范围/跨进程的暂存也不属于本次会话 —— 因此队列侧以 [sessionStagedIds]（本会话暂存）
+     * + `pendingMoves`（本范围待移动）为基座，不再重放 `history` 清全局队列；
+     * 账本与计数则遍历 `history` 逐条递减（已落盘/已封印的已在 commit 时出栈）。
+     * 维护不变量 `processedCount ≥ history.size`：封印项离栈时计数不动，
+     * 此处禁止在循环外归零。
      */
     fun discardChanges() {
+        // P10 兜底网：可见入口（退出确认框/X/返回键）均已在 submitting 期间禁用，
+        // 此处静默返回仅防竞态；所有读写都在主线程，无需加锁。
+        if (_state.value.submitting) return
+
+        // 1) 队列副作用：只丢本会话的暂存；本范围全部待移动
+        sessionStagedIds.toList().forEach {
+            staging.unstage(it)
+            // restart 后 history 已空，此处必须显式抹账，否则照片会既不在队列也不算待整理
+            reviewed.unmark(it)
+        }
+        sessionStagedIds.clear()
+        pendingMoves.keys.toList().forEach {
+            pendingMoves.remove(it)
+            reviewed.unmark(it)
+        }
+
+        // 2) 账本与计数器：history 里只剩未提交项（已落盘/已封印的已在 commit 时出栈）
+        // 队列侧已在步骤 1 处理，重复 unstage/remove 是空操作；重复 unmark 是幂等的。
         while (history.isNotEmpty()) {
             val record = history.removeLast()
-            when (record.action) {
-                ReviewAction.Trash -> staging.unstage(record.image.id)
-                ReviewAction.Move -> pendingMoves.remove(record.image.id)
-                // 保留没有队列副作用，回滚它只是把账本和计数退回去（计数在循环外统一归零）
-                ReviewAction.Keep -> Unit
-            }
             reviewed.unmark(record.image.id)
+            if (record.action == ReviewAction.Keep) keptCount--
+            processedCount--
         }
-        processedCount = 0
-        keptCount = 0
+        // 禁止在循环外归零：processedCount ≥ history.size 是不变量，
+        // 封印项离开栈时计数器不动，留下的正是「已落盘/已封印」那部分
+
         persist()
         // 账本可能还欠着节流窗口里的几条，必须立刻结清 —— 丢弃之后立刻退出整理页，
         // 留着没写的记录会让首页数字对不上。
@@ -416,6 +470,9 @@ class ReviewViewModel(
      * 账本本身不动，所以滑到一半退出去、再进来，看到的仍是「已整理」的状态。
      */
     fun restart() {
+        // P10 兜底网：可见入口（⠇ 菜单重来一轮）均已在 submitting 期间禁用，此处仅防竞态（主线程，无锁）。
+        // P11(iv)：实现与既有测试保持不变 —— 索引不再依赖 history，因此 processed==0 与「保留排队项」同时成立。
+        if (_state.value.submitting) return
         generation++
         queue.clear()
         loadingPage = false
@@ -436,6 +493,8 @@ class ReviewViewModel(
      * 否则滑到最后一张时会停在 deferred 上，且没有任何动作能推进它。
      */
     fun deferCurrent() {
+        // P10 兜底网：可见入口均已门控，此处仅防提交期间的竞态写入（主线程，无锁）。
+        if (_state.value.submitting) return
         if (queue.deferCurrent() == null) return
         syncState()
     }
@@ -461,10 +520,12 @@ class ReviewViewModel(
             return
         }
 
+        // P2：同步置位必须在 launch 之前 —— 现写法之所以能挡双击，仅依赖
+        // Dispatchers.Main.immediate 的内联派发，属隐式依赖；所有读写都在主线程，无需加锁。
+        _state.update {
+            it.copy(submitting = true, submittingLabel = pendingLabel(moves.size, trashes.size))
+        }
         viewModelScope.launch {
-            _state.update {
-                it.copy(submitting = true, submittingLabel = pendingLabel(moves.size, trashes.size))
-            }
 
             try {
                 // 1) 移动属于「改数据」：要一次写授权，授权后由应用自己改 RELATIVE_PATH
@@ -501,13 +562,38 @@ class ReviewViewModel(
                 Log.e(TAG, "commit failed: ${pendingLabel(moves.size, trashes.size)}", e)
                 ops.emit(strings.get(R.string.media_op_failed))
             } finally {
+                // P2(γ) 出栈封印：从状态派生已结算项，天然覆盖全成功/部分成功/全失败
+                // 以及 op() 抛异常（此时 dropUnreachableMoves 不执行，差集为空 ⇒ 不封印）三种结果。
+                // 封印 = 出栈，不引入 ReviewRecord.isCommitted 字段 —— history 的唯一职责就是撤销栈。
+                // 出栈时计数器不动（那些照片仍是「已决定」），维护 processedCount ≥ history.size。
+                val settledMoveIds = moves.map { it.imageId }
+                    .filterNot { it in pendingMoves.keys }.toSet()
+                val settledTrashIds = trashes.map { it.id }
+                    .filterNot { id -> staging.items.value.any { it.id == id } }.toSet()
+                val hasAnySettled = settledMoveIds.isNotEmpty() || settledTrashIds.isNotEmpty()
+                if (settledMoveIds.isNotEmpty() || settledTrashIds.isNotEmpty()) {
+                    history.removeAll { r ->
+                        (r.action == ReviewAction.Move && r.image.id in settledMoveIds) ||
+                            (r.action == ReviewAction.Trash && r.image.id in settledTrashIds)
+                    }
+                }
+                // 成功门控封印：一个零持久化效果的提交不是检查点。
+                // 全失败/全拒绝时严禁封印任何 Keep —— 否则 discardChanges() 无法回滚本次会话的 Keep。
+                if (hasAnySettled) {
+                    history.removeAll { it.action == ReviewAction.Keep }
+                }
+                if (settledTrashIds.isNotEmpty()) {
+                    sessionStagedIds.removeAll(settledTrashIds)
+                }
                 // 不论成功、被拒还是中断，收尾都不能省：
                 //  · 「打算」必须与内存对齐后落盘 —— 成功时 onSuccess 已把队列清空，
                 //    这里存空列表等价于清除；被拒/中断时留在内存里的意图必须保住（见 R1）。
                 //  · submitting 必须复位 —— 否则异常路径上提交按钮永久转圈，会话锁死。
                 //  · 重扫照片库，让首页/回收站反映真实状态。
                 session.savePendingMoves(scope.key, pendingMoves.values.toList())
-                session.saveStaging(staging.items.value.map { it.id })
+                // P4b 落地后 StagingTrash 自持落盘，此处不再写全局暂存快照
+                // （批次一保留、批次二剥离 —— 最终态为剥离，避免内存已清、磁盘仍留旧 id 的窗口
+                // 由 imagesByIds 自然剔除的低影响窗口，但破坏批次一可独立验证的前提）。
                 // 「已整理」账本也在这里结清：提交是用户认为「这一轮办完了」的时刻，
                 // 不能还欠着没写盘（节流窗口内最多只会有十几条没落盘，但没理由不写）。
                 reviewed.flush()
@@ -630,6 +716,11 @@ class ReviewViewModel(
                 next = queue.peek(1),
                 pendingMoveCount = pendingMoves.size,
                 canUndo = history.isNotEmpty(),
+                // P11(iv) 口径分离：退出对话框的「丢弃 N 项」只计本会话
+                // （Keep 记录数 + 本会话暂存 + 本范围待移动）；顶栏状态行仍用 pendingTotal（全局）。
+                // pendingMoves.size > 0 ⟹ discardableCount > 0（每条待移动项必然追加过记录），不会锁死。
+                discardableCount = history.count { r -> r.action == ReviewAction.Keep } +
+                    sessionStagedIds.size + pendingMoves.size,
                 finished = remaining == 0,
                 preparing = !blocked && queue.peek(0) == null && remaining > 0,
                 keptCount = keptCount,
@@ -645,13 +736,16 @@ class ReviewViewModel(
     // ------------------------------------------------------------ 持久化
 
     /**
-     * 把「打算删哪些 / 打算挪到哪」写进应用私有存储。
+     * 把「打算挪到哪」写进应用私有存储。
      *
      * 注意保存的是**意图**而不是事实：照片本身没有任何变化，
      * 应用被系统回收时丢掉的也只是「还没提交的决定」—— 这正是要接回来的东西。
+     *
+     * P4b：暂存快照不再经由此处 —— `StagingTrash(sessionStore)` 自持落盘，
+     * `restorePendingMoves()` 只恢复移动项却去重写全局 Staging 正是竞态根因。
+     * 此处只剩 `savePendingMoves`。
      */
     private fun persist() {
-        session.saveStaging(staging.items.value.map { it.id })
         session.savePendingMoves(scope.key, pendingMoves.values.toList())
     }
 
