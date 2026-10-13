@@ -11,6 +11,14 @@ class MediaScopeCodecTest {
     }
 
     @Test
+    fun `screenshots round-trips`() {
+        assertEquals(
+            MediaScope.Screenshots,
+            MediaScope.decode(MediaScope.encode(MediaScope.Screenshots)),
+        )
+    }
+
+    @Test
     fun `month round-trips`() {
         val scope = MediaScope.Month(2026, 10)
         assertEquals(scope, MediaScope.decode(MediaScope.encode(scope)))

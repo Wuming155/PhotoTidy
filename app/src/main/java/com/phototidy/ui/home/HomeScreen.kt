@@ -12,11 +12,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.CropFree
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
@@ -32,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -67,6 +71,7 @@ fun HomeScreen(
     onOpenScope: (MediaScope) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAlbums: () -> Unit,
+    onOpenDuplicates: () -> Unit,
     onRefresh: () -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
@@ -78,6 +83,14 @@ fun HomeScreen(
         remainingLabel(state.remainingTotal)
     } else {
         photosLabel(state.totalCount)
+    }
+
+    // 截图磁贴上的数字。必须在 `LazyColumn` 的**外面**算：`LazyListScope` 的
+    // content lambda 不是组合上下文，把 `stringResource` 之类放进去直接编译不过。
+    val screenshotBadge = if (state.screenshotCount > 0) {
+        remainingCompactLabel(state.screenshotRemaining, state.screenshotCount)
+    } else {
+        null
     }
 
     LazyColumn(
@@ -147,6 +160,56 @@ fun HomeScreen(
             )
         }
 
+        // ---------------------------------------------------------- 快捷分类
+        // 分类入口按「有内容才出现」处理：「截图 · 剩 0 / 0」这种空磁贴对用户是纯噪音。
+        // 「重复照片」是唯一例外 —— 有没有重复必须扫过才知道，而这条扫描要解码几百张
+        // 缩略图，不能塞进冷启动。所以它常驻，代价推给点进去的那一刻。
+        val quickTiles = buildList {
+            if (screenshotBadge != null) {
+                add(
+                    QuickTileSpec(
+                        key = MediaScope.Screenshots.key,
+                        titleRes = R.string.home_tile_screenshots,
+                        subtitleRes = R.string.home_tile_screenshots_desc,
+                        icon = Icons.Rounded.CropFree,
+                        badge = screenshotBadge,
+                        onClick = { onOpenScope(MediaScope.Screenshots) },
+                    ),
+                )
+            }
+            if (state.totalCount > 0) {
+                add(
+                    QuickTileSpec(
+                        key = "duplicates",
+                        titleRes = R.string.home_tile_duplicates,
+                        subtitleRes = R.string.home_tile_duplicates_desc,
+                        icon = Icons.Rounded.ContentCopy,
+                        badge = null,
+                        onClick = onOpenDuplicates,
+                    ),
+                )
+            }
+        }
+        if (quickTiles.isNotEmpty()) {
+            item(key = "quick-header") {
+                SectionHeader(
+                    title = stringResource(R.string.home_section_quick),
+                    subtitle = stringResource(R.string.home_section_quick_sub),
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 10.dp),
+                )
+            }
+            item(key = "quick-tiles") {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(items = quickTiles, key = { it.key }) { tile ->
+                        QuickTile(spec = tile)
+                    }
+                }
+            }
+        }
+
         // ---------------------------------------------------------- 按月
         if (state.months.isNotEmpty()) {
             item(key = "months-header") {
@@ -174,7 +237,9 @@ fun HomeScreen(
         }
 
         // ---------------------------------------------------------- 文件夹
-        val folders = state.albums.filter { state.showEmptyAlbums || it.count > 0 }
+        // 相册全部来自 `loadOverview` 的聚合，每一项都至少有一张照片 ——
+        // MediaStore 里没有「空目录」这种实体，所以这里不存在「要不要显示 0 张的相册」这个问题。
+        val folders = state.albums
         if (folders.isNotEmpty()) {
             item(key = "folders-header") {
                 SectionHeader(
@@ -311,6 +376,93 @@ private fun HeroCard(
                         text = stringResource(R.string.home_hero_subtitle),
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.White.copy(alpha = 0.85f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 快捷分类磁贴的数据。
+ *
+ * 只带「这个范围叫什么、还剩多少」—— 点进去之后走的是同一个整理会话机制，
+ * 不需要任何分类专属的代码路径（见 notes §4：参考实现也没有独立的截图页面）。
+ *
+ * 「重复照片」这类**需要先扫描才知道结果**的入口 [badge] 传 null：
+ * 在详情页里现扫现报，而不是逼每个用户在冷启动时先等一次全库比对。
+ */
+private data class QuickTileSpec(
+    val key: String,
+    val titleRes: Int,
+    val subtitleRes: Int,
+    val icon: ImageVector,
+    /** 副标题下面的数字行（例如「剩 3 / 12」）；null = 这一项没有预先知道的数字。 */
+    val badge: String?,
+    val onClick: () -> Unit,
+)
+
+/**
+ * 分类磁贴：图标 + 名字 + 可选的「剩 N / M」。
+ *
+ * 数字口径与全应用一致：主数字是「还剩多少要整理」，总数降为副信息。
+ * 没有预先知道的数字（重复照片）时不占位，直接不渲染那一行。
+ */
+@Composable
+private fun QuickTile(spec: QuickTileSpec) {
+    Surface(
+        onClick = spec.onClick,
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier
+            .width(188.dp)
+            .height(84.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                modifier = Modifier.size(44.dp),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = spec.icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(spec.titleRes),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = spec.badge ?: stringResource(spec.subtitleRes),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (spec.badge != null) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (spec.badge != null) {
+                    Text(
+                        text = stringResource(spec.subtitleRes),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }

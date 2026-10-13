@@ -60,7 +60,10 @@ fun AlbumsScreen(
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
-    val albums = state.albums.filter { state.showEmptyAlbums || it.count > 0 }
+    // 相册全部来自 `loadOverview` 的聚合，每一项都至少有一张照片 ——
+    // MediaStore 里没有「空目录」这种实体，所以没有「过滤掉 0 张的相册」这回事。
+    // （曾经有一个「显示空文件夹」开关在这里做过滤，它是永远不生效的死开关，已删除。）
+    val albums = state.albums
 
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 156.dp),

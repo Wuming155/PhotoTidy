@@ -49,7 +49,14 @@ class MediaOpCoordinator(private val strings: StringProvider) {
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
-    /** 正在等用户做选择的那一次授权。同一时刻只允许一个 —— 由 [gate] 保证。 */
+    /**
+     * 正在等用户做选择的那一次授权。同一时刻只允许一个 —— 由 [gate] 保证。
+     *
+     * `@Volatile` 是因为写入发生在调用方的调度器上、而 [resumeConsent] 从主线程读取：
+     * 没有它，主线程可能读到一份过期的引用，于是「用户已经点了允许」却没人被唤醒，
+     * 只能等 5 分钟兜底超时。
+     */
+    @Volatile
     private var waiting: CancellableContinuation<Boolean>? = null
 
     /**

@@ -38,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,7 +67,9 @@ import com.phototidy.ui.albums.AlbumsScreen
 import com.phototidy.ui.components.HelpSheet
 import com.phototidy.ui.components.PermissionScreen
 import com.phototidy.ui.components.shortLabel
+import com.phototidy.ui.duplicates.DuplicatesScreen
 import com.phototidy.ui.home.HomeScreen
+import com.phototidy.ui.review.ExitReviewDialog
 import com.phototidy.ui.review.ReviewScreen
 import com.phototidy.ui.review.ReviewViewModel
 import com.phototidy.ui.review.ScopeGroup
@@ -154,9 +157,6 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
     LaunchedEffect(Unit) {
         Graph.mediaOps.messages.collect { message -> snackbarHostState.showSnackbar(message) }
     }
-    LaunchedEffect(settings.showEmptyAlbums) {
-        libraryVm.setShowEmptyAlbums(settings.showEmptyAlbums)
-    }
 
     // ---------------------------------------------------------------- 导航
     var tabName by rememberSaveable { mutableStateOf(RootTab.Home.name) }
@@ -164,12 +164,27 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
     var scopeEncoded by rememberSaveable { mutableStateOf("") }
     var helpVisible by remember { mutableStateOf(false) }
     var showTrash by rememberSaveable { mutableStateOf(false) }
+    var showDuplicates by rememberSaveable { mutableStateOf(false) }
+    /** 退出整理的确认框（有待提交改动时才拦一道）。 */
+    var exitConfirmOpen by remember { mutableStateOf(false) }
+    /**
+     * 当前整理会话的 ViewModel，只给系统返回键用。
+     *
+     * 返回键的处理在整理页**之外**（这一层管导航），而「有没有待提交改动」只有会话知道。
+     * 存一个引用按需读 `state.value` 即可 —— 它是快照读取，不进组合期，不需要重组。
+     */
+    var reviewVmForBack by remember { mutableStateOf<ReviewViewModel?>(null) }
 
     val reviewScope = MediaScope.decode(scopeEncoded)
     val currentTab = RootTab.entries.firstOrNull { it.name == tabName } ?: RootTab.Home
     val selectedTab = if (showSettings) RootTab.Settings else currentTab
 
     fun selectTab(selected: RootTab) {
+        // 回收站 / 重复照片都是「次要页面」：点了底部导航的任意一项就该离开它们。
+        // 不清这些标志的话导航在那些页面上是**死的** —— `destinationKey` 里它们
+        // 优先于 tab，于是点「整理」「相册」都还停在原地，只能靠返回键出去。
+        showTrash = false
+        showDuplicates = false
         if (selected == RootTab.Settings) {
             showSettings = true
         } else {
@@ -205,15 +220,42 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
     }
 
     // 系统返回 / 预测性返回：整理页 → 回收站 → 设置页 → 交给系统
-    BackHandler(enabled = reviewScope != null) { leaveReview() }
-    BackHandler(enabled = reviewScope == null && showTrash) { showTrash = false }
-    BackHandler(enabled = reviewScope == null && !showTrash && showSettings) { showSettings = false }
+    // 整理页里返回不再直接退出：有待提交改动时先问一次（见 ExitReviewDialog）——
+    // 退出整理页即保留会话，用户有可能以为自己「取消」了这轮整理。
+    BackHandler(enabled = reviewScope != null) {
+        if (reviewVmForBack?.state?.value?.hasPending == true) {
+            exitConfirmOpen = true
+        } else {
+            leaveReview()
+        }
+    }
+    BackHandler(enabled = reviewScope == null && showDuplicates) { showDuplicates = false }
+    BackHandler(enabled = reviewScope == null && !showDuplicates && showTrash) { showTrash = false }
+    BackHandler(enabled = reviewScope == null && !showDuplicates && !showTrash && showSettings) {
+        showSettings = false
+    }
+
+    // 概览始终没来（首次扫描就失败了）：退回首页，别让用户对着一个永远转不完的圈。
+    // 判据必须带 access —— 权限还没判定完时 overview 也是 null，那不是失败。
+    val reviewWaitingForLibrary = reviewScope != null &&
+        libraryState.overview == null &&
+        !libraryState.loading &&
+        libraryState.access?.canRead == true
+    LaunchedEffect(reviewWaitingForLibrary) {
+        if (reviewWaitingForLibrary) leaveReview()
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         when {
             // ------------------------------------- 整理页（全屏，无导航壳）
             reviewScope != null -> {
-                if (libraryState.totalCount == 0 && libraryState.loading) {
+                // ⚠️ 概览没就绪时**不能**建 ReviewViewModel：它的 total / remaining 是构造参数，
+                // 而 `viewModel(key = ...)` 一旦把它缓存进 ViewModelStore，之后传进来的新参数
+                // 全部被忽略。进程死亡恢复时首帧的 `LibraryUiState` 还是初始值
+                // （totalCount = 0，且 loading 初始就是 false），所以这里只能判 overview ——
+                // 判 totalCount/loading 会让它拿着 total = 0 建出来，然后**永远**渲染
+                // 「保留 0 / 移动 0 / 回收 0」的完成卡片（「再来一轮」也救不回来）。
+                if (libraryState.overview == null) {
                     LoadingScreen()
                 } else {
                     val scopeLabel = reviewScope.shortLabel()
@@ -253,8 +295,12 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                         libraryState.months,
                         libraryState.totalCount,
                         libraryState.remainingTotal,
+                        libraryState.screenshotCount,
+                        libraryState.screenshotRemaining,
                     ) {
                         buildList {
+                            // 前两项是「快捷范围」，与「最近」同组渲染（不带分区标题）——
+                            // 它们永远是少数几个、而且是最常用的入口。
                             add(
                                 ScopeOption(
                                     scope = MediaScope.Recent,
@@ -263,6 +309,17 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                                     group = ScopeGroup.Recent,
                                 ),
                             )
+                            // 一张截图都没有就不给入口：列一行「截图 · 剩 0 / 0」没有意义
+                            if (libraryState.screenshotCount > 0) {
+                                add(
+                                    ScopeOption(
+                                        scope = MediaScope.Screenshots,
+                                        count = libraryState.screenshotCount,
+                                        remaining = libraryState.screenshotRemaining,
+                                        group = ScopeGroup.Recent,
+                                    ),
+                                )
+                            }
                             libraryState.albums.forEach { album ->
                                 add(
                                     ScopeOption(
@@ -297,9 +354,26 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                     val onRestart = remember(reviewVm) { reviewVm::restart }
                     val onDefer = remember(reviewVm) { reviewVm::deferCurrent }
                     val onRetryLoad = remember(reviewVm) { reviewVm::retryLoad }
-                    val onCloseReview = remember { { leaveReview() } }
+                    val onCreateAlbum = remember(reviewVm) { reviewVm::createAlbum }
+                    val onRestoreStaged = remember(reviewVm) { reviewVm::restoreFromStaging }
+                    val onRestoreAllStaged = remember(reviewVm) { reviewVm::restoreAllStaged }
+                    val onDiscardChanges = remember(reviewVm) { reviewVm::discardChanges }
+                    // 有待提交改动就先问一次（exitConfirmOpen）；没有就直接退出 ——
+                    // 没有任何决定要丢的时候，多一个确认框只是挡路。
+                    val onCloseReview = remember {
+                        {
+                            if (reviewState.hasPending) {
+                                exitConfirmOpen = true
+                            } else {
+                                leaveReview()
+                            }
+                        }
+                    }
                     val onOpenHelp = remember { { helpVisible = true } }
                     val onPickScope = remember { { scope: MediaScope -> openScope(scope) } }
+
+                    // 把会话引用交给返回键（见 reviewVmForBack 的注释）
+                    SideEffect { reviewVmForBack = reviewVm }
 
                     ReviewScreen(
                         state = reviewState,
@@ -319,8 +393,27 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                         onRestart = onRestart,
                         onDefer = onDefer,
                         onRetryLoad = onRetryLoad,
+                        onCreateAlbum = onCreateAlbum,
+                        onRestoreStaged = onRestoreStaged,
+                        onRestoreAllStaged = onRestoreAllStaged,
                         modifier = Modifier.fillMaxSize(),
                     )
+
+                    if (exitConfirmOpen) {
+                        ExitReviewDialog(
+                            pendingCount = reviewState.pendingTotal,
+                            onContinue = { exitConfirmOpen = false },
+                            onKeepAndLeave = {
+                                exitConfirmOpen = false
+                                leaveReview()
+                            },
+                            onDiscardAndLeave = {
+                                exitConfirmOpen = false
+                                onDiscardChanges()
+                                leaveReview()
+                            },
+                        )
+                    }
 
                 }
             }
@@ -380,6 +473,7 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                         val contentPadding = PaddingValues(top = innerPadding.calculateTopPadding())
 
                         val destinationKey = when {
+                            showDuplicates -> "duplicates"
                             showTrash -> "trash"
                             showSettings -> "settings"
                             else -> currentTab.name
@@ -390,6 +484,18 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                             label = "root-content",
                         ) { destination ->
                             when (destination) {
+                                // 重复照片：纯本地比对，进页面才扫（见 DuplicatesScreen 的注释）
+                                "duplicates" -> DuplicatesScreen(
+                                    groups = libraryState.duplicateGroups,
+                                    scanning = libraryState.duplicateScanning,
+                                    scanned = libraryState.duplicateScanned,
+                                    onScan = libraryVm::scanDuplicates,
+                                    onTrash = libraryVm::trashDuplicateImages,
+                                    onBack = { showDuplicates = false },
+                                    contentPadding = contentPadding,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+
                                 // 回收站：从设置页进来，不再占底部导航
                                 "trash" -> TrashScreen(
                                     systemTrash = libraryState.trash,
@@ -412,7 +518,6 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                                     onOpenTrash = { showTrash = true },
                                     onUpdate = { transform ->
                                         settingsStore.update(transform)
-                                        libraryVm.setShowEmptyAlbums(transform(settings).showEmptyAlbums)
                                     },
                                     onBack = { showSettings = false },
                                     contentPadding = contentPadding,
@@ -434,6 +539,7 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                                     onOpenScope = { scope -> openScope(scope) },
                                     onOpenSettings = { showSettings = true },
                                     onOpenAlbums = { tabName = RootTab.Albums.name },
+                                    onOpenDuplicates = { showDuplicates = true },
                                     onRefresh = libraryVm::refresh,
                                     contentPadding = contentPadding,
                                     modifier = Modifier.fillMaxSize(),

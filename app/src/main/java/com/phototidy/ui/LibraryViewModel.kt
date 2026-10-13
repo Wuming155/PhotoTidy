@@ -7,6 +7,8 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.phototidy.Graph
 import com.phototidy.R
+import com.phototidy.core.media.DuplicateFinder
+import com.phototidy.core.media.DuplicateGroup
 import com.phototidy.core.media.LibraryOverview
 import com.phototidy.core.media.MediaAccess
 import com.phototidy.core.media.MediaOpCoordinator
@@ -59,9 +61,17 @@ data class LibraryUiState(
     /** 系统回收站已加载的那几页。 */
     val trash: List<MediaImage> = emptyList(),
     val trashCount: Int = 0,
+    /** 截图范围：一共多少张。0 = 设备上没有截图，首页与范围选择器都不给入口。 */
+    val screenshotCount: Int = 0,
+    /** 截图范围里还没整理过多少张。 */
+    val screenshotRemaining: Int = 0,
+    /** 重复照片：是否正在比对。 */
+    val duplicateScanning: Boolean = false,
+    /** 已经比对过一轮（用来区分「还没扫」和「扫完发现没有」）。 */
+    val duplicateScanned: Boolean = false,
+    val duplicateGroups: List<DuplicateGroup> = emptyList(),
     val trashLoadingMore: Boolean = false,
     val trashLoadError: Boolean = false,
-    val showEmptyAlbums: Boolean = false,
 ) {
     val albums: List<MediaAlbum> get() = overview?.albums.orEmpty()
 
@@ -106,6 +116,8 @@ class LibraryViewModel(
     private val res: Resources,
     /** 「已整理」账本：概览扫描要用它把待整理数从总数里扣出来。 */
     private val reviewed: ReviewedLedger,
+    /** 重复照片比对（纯本地，见 [DuplicateFinder]）。 */
+    private val duplicates: DuplicateFinder,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LibraryUiState())
@@ -114,31 +126,56 @@ class LibraryViewModel(
     private var loadedOnce = false
     private var sessionRestored = false
 
+    /** 正在扫描中。同时充当并发刷新的合并开关（见 [refresh]）。 */
+    private var refreshing = false
+
+    /** 扫描期间又来了刷新请求 —— 跑完补一次，不能直接丢。 */
+    private var refreshQueued = false
+
     /**
      * 权限结果回来了。
      *
      * 三条规则：
      *  1) 从无到有 → 扫描；
      *  2) 从「部分授权」升级到「完全授权」→ 必须重新扫描，否则用户会一直只看到那几张选中的照片；
-     *  3) 反复拿到同样的结果（例如每次 onResume 都调用）→ 什么都不做。
+     *  3) 只要当前是**部分授权**，每次回到前台都重扫。
+     *
+     * 第 3 条看着像浪费，其实是必需的：Android 14+ 的「选择更多照片」不走应用的权限回调，
+     * 用户重新勾一批之后 `READ_MEDIA_VISUAL_USER_SELECTED` 仍是已授予 ——
+     * `MediaPermissions.current()` 前后都返回 [MediaAccess.Partial]，状态**没有变化**。
+     * 只比枚举值的话，新授权的那批照片在界面上永远不会出现，
+     * 而相册页那条横幅的按钮承诺的正是「选完就能看到更多」。部分授权是不稳定状态，
+     * 不能用「状态是否变化」来判断要不要重扫。
      */
     fun onAccessResolved(access: MediaAccess) {
         val previous = _state.value.access
         _state.update { it.copy(access = access) }
         if (!access.canRead) return
-        if (!loadedOnce || access != previous) {
+        if (!loadedOnce || access != previous || access.isPartial) {
             loadedOnce = true
             refresh()
         }
     }
 
+    /**
+     * 重新扫描照片库。
+     *
+     * 并发请求会被**合并**：同一份只读数据不需要两遍全表扫描，但后到的请求也不能直接丢掉 ——
+     * 它可能是「提交之后」触发的，那时照片库已经变了，丢掉就会让界面停在旧数据上。
+     * 所以记一个待办，当前这轮跑完再补一次。
+     */
     fun refresh() {
         if (!_state.value.canRead) return
+        if (refreshing) {
+            refreshQueued = true
+            return
+        }
+        refreshing = true
         viewModelScope.launch {
             _state.update { it.copy(loading = true) }
             try {
-                // 概览（全表扫描）、回收站计数、回收站首页三路查询互不依赖，并行取：
-                // 大库上刷新耗时从「三者之和」收敛为「最慢的一个」。
+                // 概览（全表扫描）、回收站计数、回收站首页、截图统计四路查询互不依赖，并行取：
+                // 大库上刷新耗时从「四者之和」收敛为「最慢的一个」。
                 // runCatching 换成不吞取消的变体：取消是流程控制不是失败，
                 // 吞掉会让「刷新被取消」冒充成「读取失败」弹给用户。
                 val overviewDeferred = async {
@@ -147,34 +184,52 @@ class LibraryViewModel(
                 val trashCountDeferred = async { runCatchingUnlessCancelled { repo.countTrashed() } }
                 val firstPageDeferred =
                     async { runCatchingUnlessCancelled { repo.pageTrashed(0, TRASH_PAGE_SIZE) } }
+                // 截图统计也是一条独立查询（见 loadScreenshotStats 的注释），同样并行取。
+                // 截图通常只有几百张，这条查询的代价与照片库规模无关。
+                val screenshotsDeferred =
+                    async { runCatchingUnlessCancelled { repo.loadScreenshotStats(reviewed::contains) } }
 
                 val overview = overviewDeferred.await()
                     .onFailure {
                         // 必须说出来。以前这里只往一个没人读的字段里塞文案，
                         // 结果扫描失败对用户完全静默 —— 看起来就像「照片全没了」。
                         // 旧状态（overview）保持不变，所以失败不会把已有内容清空。
-                        _state.update { state -> state.copy(loading = false) }
                         ops.emit(res.getString(R.string.library_load_failed))
                     }
-                    .getOrNull() ?: return@launch
+                    .getOrNull()
 
-                val trashCount = trashCountDeferred.await().getOrDefault(0)
-                val firstPage = firstPageDeferred.await().getOrDefault(emptyList())
+                if (overview != null) {
+                    val trashCount = trashCountDeferred.await().getOrDefault(0)
+                    val firstPage = firstPageDeferred.await().getOrDefault(emptyList())
+                    // 这条查询失败不等于照片库坏了：截图为 null 时把两个数字**保持原样**，
+                    // 而不是清成 0 —— 清 0 会让首页磁贴突然消失，看起来像截图被删了。
+                    val screenshots = screenshotsDeferred.await().getOrNull()
 
-                _state.update {
-                    it.copy(
-                        loading = false,
-                        overview = overview,
-                        trash = firstPage,
-                        trashCount = trashCount,
-                    )
+                    _state.update {
+                        it.copy(
+                            loading = false,
+                            overview = overview,
+                            trash = firstPage,
+                            trashCount = trashCount,
+                            screenshotCount = screenshots?.first ?: it.screenshotCount,
+                            screenshotRemaining = screenshots?.second ?: it.screenshotRemaining,
+                        )
+                    }
+                    // 暂存队列的恢复必须挂在「扫描成功」之后：照片 id 要靠 MediaStore 换回完整元数据。
+                    // 首次扫描失败时它会推迟到下一次成功的扫描 —— 这是刻意的，
+                    // 否则恢复出来的队列可能是基于一份不完整的库。
+                    restoreSessionOnce()
                 }
-                restoreSessionOnce()
             } finally {
                 // 取消路径（runCatchingUnlessCancelled 不再吞 CancellationException）
-                // 也必须把 loading 复位。当前取消等价于 VM 销毁、复位无人可见；
-                // 这层兜的是将来 refresh 被挪进更窄作用域/加防抖时的「永久转圈」。
+                // 也必须把 loading / refreshing 复位。当前取消等价于 VM 销毁、复位无人可见；
+                // 这层兜的是将来 refresh 被挪进更窄作用域/加防抖时的「永久转圈 + 闸门锁死」。
                 _state.update { it.copy(loading = false) }
+                refreshing = false
+            }
+            if (refreshQueued) {
+                refreshQueued = false
+                refresh()
             }
         }
     }
@@ -251,9 +306,70 @@ class LibraryViewModel(
         }
     }
 
-    /** 让外部（例如设置页）把「显示空相册」这个偏好同步进来。 */
-    fun setShowEmptyAlbums(show: Boolean) {
-        _state.update { it.copy(showEmptyAlbums = show) }
+    // ------------------------------------------------------ 重复照片
+
+    /**
+     * 比对全库的重复照片。
+     *
+     * 刻意**不做开机预热**：这条扫描要解码几百张缩略图，放在冷启动路径上
+     * 等于让每个用户为「可能根本不存在的重复照片」先等几秒。改成进页面才扫。
+     */
+    fun scanDuplicates() {
+        if (_state.value.duplicateScanning) return
+        viewModelScope.launch {
+            _state.update { it.copy(duplicateScanning = true) }
+            try {
+                val groups = runCatchingUnlessCancelled { duplicates.findDuplicates() }
+                    .onFailure { ops.emit(res.getString(R.string.duplicate_scan_failed)) }
+                    .getOrDefault(emptyList())
+                _state.update {
+                    it.copy(
+                        duplicateScanning = false,
+                        duplicateScanned = true,
+                        duplicateGroups = groups,
+                    )
+                }
+            } finally {
+                // 取消路径（离开页面）也必须复位，否则下次进来会卡在「正在比对」
+                _state.update { it.copy(duplicateScanning = false) }
+            }
+        }
+    }
+
+    /**
+     * 把重复照片里挑出来的那些移进系统回收站。
+     *
+     * 走的是与「清除」完全相同的语义与通道：`createTrashRequest` 是**授权即执行**，
+     * 用户点同意时系统就已经做完了（见 [MediaStoreRepository.moveToSystemTrash]）——
+     * 所以这里没有直删快路径，照片在系统回收站里还能还原 30 天。
+     */
+    fun trashDuplicateImages(images: List<MediaImage>) {
+        if (images.isEmpty()) return
+        val removed = images.map { it.id }.toSet()
+        viewModelScope.launch {
+            ops.runStaged(
+                successMessage = res.getString(R.string.duplicate_trashed, images.size),
+                onSuccess = {
+                    // 已经做过决定：进回收站的照片不该再回到整理队列
+                    images.forEach { reviewed.mark(it.id) }
+                    // 就地收敛剩下的组，不再重扫一遍全库 —— 用户刚刚才看过这些结果
+                    _state.update { state ->
+                        state.copy(
+                            duplicateGroups = state.duplicateGroups.mapNotNull { group ->
+                                val left = group.images.filterNot { it.id in removed }
+                                if (left.size >= 2) {
+                                    DuplicateGroup(left, left.drop(1).sumOf { it.sizeBytes })
+                                } else {
+                                    null
+                                }
+                            },
+                        )
+                    }
+                    refresh()
+                },
+                consentBudget = 1,
+            ) { attempt -> repo.moveToSystemTrash(images.map { it.id }, attempt) }
+        }
     }
 
     /**
@@ -266,6 +382,7 @@ class LibraryViewModel(
      */
     fun scopeCount(scope: MediaScope): Int = when (scope) {
         MediaScope.Recent -> _state.value.totalCount
+        MediaScope.Screenshots -> _state.value.screenshotCount
         is MediaScope.Album -> _state.value.albums.firstOrNull { it.bucketId == scope.bucketId }?.count ?: 0
         is MediaScope.Month -> _state.value.months
             .firstOrNull { it.year == scope.year && it.month == scope.month }?.count ?: 0
@@ -278,6 +395,7 @@ class LibraryViewModel(
      */
     fun scopeRemaining(scope: MediaScope): Int = when (scope) {
         MediaScope.Recent -> _state.value.remainingTotal
+        MediaScope.Screenshots -> _state.value.screenshotRemaining
         is MediaScope.Album -> _state.value.albums
             .firstOrNull { it.bucketId == scope.bucketId }?.remaining ?: 0
 
@@ -370,6 +488,7 @@ class LibraryViewModel(
                     session = Graph.sessionStore,
                     res = Graph.resources,
                     reviewed = Graph.reviewedLedger,
+                    duplicates = Graph.duplicateFinder,
                 )
             }
         }

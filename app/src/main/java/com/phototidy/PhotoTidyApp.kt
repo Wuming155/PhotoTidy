@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.res.Resources
 import com.phototidy.core.StringProvider
 import com.phototidy.core.ResourcesStringProvider
+import com.phototidy.core.media.DuplicateFinder
 import com.phototidy.core.media.MediaOpCoordinator
 import com.phototidy.core.media.MediaStoreRepository
 import com.phototidy.core.media.RealSessionStore
@@ -50,6 +51,14 @@ object Graph {
     val reviewedLedger: ReviewedLedger by lazy { ReviewedLedger(sessionStore) }
 
     val mediaOps: MediaOpCoordinator by lazy { MediaOpCoordinator(stringProvider) }
+
+    /**
+     * 重复照片比对。
+     *
+     * 纯本地实现（见 [DuplicateFinder]）：先按文件大小粗筛、再对候选算 dHash 指纹。
+     * 需要 Context 是因为要解码缩略图，但**不碰网络** —— 应用清单里没有网络权限。
+     */
+    val duplicateFinder: DuplicateFinder by lazy { DuplicateFinder(appContext, repository) }
 
     fun install(context: Context) {
         appContext = context.applicationContext

@@ -28,8 +28,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.core.net.toUri
 import androidx.compose.ui.unit.dp
-import android.net.Uri
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
@@ -66,7 +66,7 @@ fun LibraryImage(
     val uri = image.uri
     val request = remember(context, uri, crossfade) {
         ImageRequest.Builder(context)
-            .data(Uri.parse(uri))
+            .data(uri.toUri())
             .crossfade(crossfade)
             .build()
     }

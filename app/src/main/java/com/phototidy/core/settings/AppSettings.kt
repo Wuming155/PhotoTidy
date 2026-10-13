@@ -19,8 +19,6 @@ data class AppSettings(
     val swipeSensitivity: Float = 1.0f,
     /** 整理页是否显示「下一张」的预览堆叠 */
     val showNextPreview: Boolean = true,
-    /** 相册页是否显示 0 张的文件夹 */
-    val showEmptyAlbums: Boolean = false,
     val helpShown: Boolean = false,
 )
 
@@ -49,7 +47,6 @@ class SettingsStore(context: Context) {
         hapticsEnabled = prefs.getBoolean(KEY_HAPTICS, true),
         swipeSensitivity = prefs.getFloat(KEY_SENSITIVITY, 1.0f).coerceIn(0.6f, 1.8f),
         showNextPreview = prefs.getBoolean(KEY_NEXT_PREVIEW, true),
-        showEmptyAlbums = prefs.getBoolean(KEY_EMPTY_ALBUMS, false),
         helpShown = prefs.getBoolean(KEY_HELP_SHOWN, false),
     )
 
@@ -66,7 +63,6 @@ class SettingsStore(context: Context) {
             putBoolean(KEY_HAPTICS, next.hapticsEnabled)
             putFloat(KEY_SENSITIVITY, next.swipeSensitivity)
             putBoolean(KEY_NEXT_PREVIEW, next.showNextPreview)
-            putBoolean(KEY_EMPTY_ALBUMS, next.showEmptyAlbums)
             putBoolean(KEY_HELP_SHOWN, next.helpShown)
         }
     }
@@ -90,7 +86,6 @@ class SettingsStore(context: Context) {
         const val KEY_HAPTICS = "haptics"
         const val KEY_SENSITIVITY = "swipe_sensitivity"
         const val KEY_NEXT_PREVIEW = "next_preview"
-        const val KEY_EMPTY_ALBUMS = "show_empty_albums"
         const val KEY_HELP_SHOWN = "help_shown"
     }
 }

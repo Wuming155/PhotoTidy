@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -49,6 +50,11 @@ fun AlbumQuickMoveBar(
     onMove: (MediaAlbum) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /**
+     * 「新相册…」的入口。传 null 时不显示这一项 ——
+     * 相册页等只做「选目标」的场景不该出现「新建」的旁路。
+     */
+    onNewAlbum: (() -> Unit)? = null,
 ) {
     Surface(
         shape = BottomSheetShape,
@@ -66,10 +72,10 @@ fun AlbumQuickMoveBar(
                 contentPadding = PaddingValues(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                // key 用 id+name 的组合而不只 id：列表里混有「系统标准目录」的合成相册，
-                // 它的 id 是 Int32 范围外的哨兵值（见 LibraryViewModel.SYNTHETIC_BUCKET_BASE），
-                // 理论上不可能与真实相册相撞；让 key 同时携带名字，把唯一性由构造保证，
-                // 而不是依赖「id 数值范围永不重叠」这个跨厂商假设。
+                // key 用 id+name 的组合而不只 id：列表里混有「系统标准目录」的合成相册
+                // 和本次会话新建的相册，它们的 id 都是 Int32 范围外的哨兵值
+                // （见 LibraryViewModel.SYNTHETIC_BUCKET_BASE / ReviewViewModel.createAlbum）。
+                // 让 key 同时携带名字，把唯一性由构造保证，而不是依赖「id 数值范围永不重叠」。
                 items(items = albums, key = { "${it.bucketId}:${it.name}" }) { album ->
                     AlbumMoveTarget(
                         album = album,
@@ -78,7 +84,59 @@ fun AlbumQuickMoveBar(
                         onClick = { onMove(album) },
                     )
                 }
+                // 「新相册」永远排在最后：它是低频动作，不能挡在常用相册前面；
+                // 但必须留在同一条横向列表里 —— 建完就要立刻投递当前这张，
+                // 把入口放到别处（菜单、弹窗）会让「建相册」和「移动」变成两个割裂的动作。
+                if (onNewAlbum != null) {
+                    item(key = "__new_album__") {
+                        NewAlbumTarget(enabled = enabled, onClick = onNewAlbum)
+                    }
+                }
             }
+        }
+    }
+}
+
+/**
+ * 「新相册…」。视觉上刻意与真实相册区分：虚线感的中性色描边 + 「+」图标，
+ * 而不是跟其他卡一样的实心容器 —— 它不是一个可以投递的目标，而是一个动作。
+ */
+@Composable
+private fun NewAlbumTarget(enabled: Boolean, onClick: () -> Unit) {
+    val outline = MaterialTheme.colorScheme.outline
+    val newAlbumLabel = stringResource(R.string.album_new_tile)
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier
+            .width(72.dp)
+            .semantics { contentDescription = newAlbumLabel },
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(
+                modifier = Modifier.size(34.dp).clip(MaterialTheme.shapes.small),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.CreateNewFolder,
+                    contentDescription = null,
+                    tint = outline,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = newAlbumLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

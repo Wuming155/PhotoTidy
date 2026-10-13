@@ -12,6 +12,8 @@ import com.phototidy.core.media.MediaOpCoordinator
 import com.phototidy.core.media.MediaRepository
 import com.phototidy.core.media.computeTargetPath
 import com.phototidy.core.media.isImageDestinationLegal
+import com.phototidy.core.media.newAlbumIssue
+import com.phototidy.core.media.newAlbumPath
 import com.phototidy.core.media.SessionStore
 import com.phototidy.core.media.StagingTrash
 import com.phototidy.core.model.MediaAlbum
@@ -39,6 +41,13 @@ data class ReviewUiState(
     val next: MediaImage? = null,
     /** 已排队、等提交的「进回收站」数量 */
     val stagedCount: Int = 0,
+    /**
+     * 已排队待清除的照片本体。
+     *
+     * 「整理中回收站」面板要展示缩略图，所以这里得带图像对象；
+     * 计数仍然以 [stagedCount] 为准（两者在同一个 collector 里一起更新，不可能背离）。
+     */
+    val stagedItems: List<MediaImage> = emptyList(),
     /** 已排队、等提交的「移动」数量 */
     val pendingMoveCount: Int = 0,
     val canUndo: Boolean = false,
@@ -118,6 +127,10 @@ private const val REFILL_BELOW = PAGE_SIZE / 2
  * 现在改成**滑动窗口**：内存里最多 150 张，滑到还剩一半就异步补下一页
  * （分页落在 SQL 的 `LIMIT/OFFSET`，见 [MediaStoreRepository.pageImages]）。
  *
+ * 窗口本身（「已加载 / 还没取到 / 稍后再看」三段的位置与取出规则）全部收在
+ * [ReviewQueueWindow] 里 —— 它是这一段唯一正确性敏感的设施，单独成类才能被单测钉死。
+ * 这个 ViewModel 只负责编排：什么时候请求下一页、什么时候补窗、什么时候结账。
+ *
  * ## 撤销栈与计数
  *
  * `history` 只保存动作记录（约 48 字节/条），不重复持有照片本身。
@@ -147,14 +160,14 @@ class ReviewViewModel(
 
     private val totalCount = totalCount
 
-    /** 已加载、尚未消费的照片。 */
-    private val window = ArrayDeque<MediaImage>()
-
-    /** 「跳过这张，稍后再看」的照片，排在整条队列的最后。 */
-    private val deferred = ArrayDeque<MediaImage>()
-
-    /** 已经从数据层取到第几张（不含窗口里还没消费的）。 */
-    private var loadedThrough = 0
+    /**
+     * 滑动窗口队列。
+     *
+     * 「已加载 / 还没取到 / 稍后再看」三段的位置与取出规则全部收在它里面 ——
+     * 分成两个出口（读位置的 `at()`、消费队首的 `advance()`）曾经口径不一致，
+     * 后果是「屏幕上有照片但所有动作静默失效」的死局。见 [ReviewQueueWindow] 的注释。
+     */
+    private val queue = ReviewQueueWindow(totalCount)
 
     private var loadingPage = false
 
@@ -165,6 +178,9 @@ class ReviewViewModel(
 
     /** 已排队但还没提交的移动：照片 id → 待移动记录 */
     private val pendingMoves = LinkedHashMap<Long, PendingMove>()
+
+    /** 本次会话新建的相册计数器，只用来保证哨兵 bucketId 唯一（见 [createAlbum]）。 */
+    private var newAlbumSeq = 0
 
     // ---- 增量计数器：syncState() 必须是 O(1) ----
     // 回收站 / 移动的数量不在这里维护，也不在 syncState() 里赋值，而是直接由
@@ -193,7 +209,9 @@ class ReviewViewModel(
 
     init {
         viewModelScope.launch {
-            staging.items.collect { items -> _state.update { it.copy(stagedCount = items.size) } }
+            staging.items.collect { items ->
+                _state.update { it.copy(stagedCount = items.size, stagedItems = items) }
+            }
         }
         restorePendingMoves()
         ensureWindow()
@@ -277,8 +295,117 @@ class ReviewViewModel(
         reviewed.unmark(last.image.id)
 
         // 放回窗口头部，用户看到的就是「刚才那张又回来了」
-        window.addFirst(last.image)
+        queue.pushFront(last.image)
         persist()
+        syncState()
+    }
+
+    // ------------------------------------------------------------ 新建相册
+
+    /**
+     * 会话内新建一个相册，并把它挂进快捷移动条，返回新相册供调用方立刻投递当前这张。
+     *
+     * 三件事刻意不做：
+     *  1) **不落盘**。MediaStore 里没有「目录」这种实体，空目录根本不存在 ——
+     *     「创建」的实体化发生在第一张照片带着 `RELATIVE_PATH` 写进去的那一刻。
+     *     所以这里只是把目标记进内存，随后的 [moveTo] 会照常把它排进待移动表
+     *     （那条记录是落盘的，冷启动能恢复，「建完就丢了」不会发生）。
+     *  2) **不做异步**。参考实现同样是同步返回、立刻投递（见 notes §1）——
+     *     建个目录要转圈，用户会以为应用卡了。
+     *  3) **不校验外部状态**。重名只跟本次会话的移动目标比：设备上已存在同名相册
+     *     在 [LibraryViewModel.moveTargets] 里已经是一个真实目标了，用户直接点它就行。
+     *
+     * 返回 null 表示名字不可用（空 / 含分隔符 / 与本次会话已有目标重名）。
+     * UI 层会用 `newAlbumIssue` 先给出**具体的**错误文案，这里只是不让脏数据进队列。
+     */
+    fun createAlbum(rawName: String): MediaAlbum? {
+        val existing = _state.value.moveTargets.map { it.name }
+        if (newAlbumIssue(rawName, existing) != null) return null
+        val name = rawName.trim()
+        val album = MediaAlbum(
+            // 哨兵区间与「系统标准目录」错开，且离 Int32 的真实 BUCKET_ID 极远
+            bucketId = NEW_ALBUM_BUCKET_BASE - (++newAlbumSeq),
+            name = name,
+            relativePath = newAlbumPath(name),
+            count = 0,
+            cover = null,
+        )
+        _state.update { it.copy(moveTargets = it.moveTargets + album) }
+        ops.emit(strings.get(R.string.album_new_created, name))
+        return album
+    }
+
+    // ------------------------------------------------------- 整理中的回收站
+
+    /**
+     * 把一张已排队待清除的照片放回整理队列（会话内回收站的「还原」）。
+     *
+     * 与 [undo] 的区别是**定位方式**：撤销是后进先出的，误删的那批如果不在栈顶，
+     * 用户就得先把后来做的所有决定全撤掉才够得着它；这里按 id 精确取回。
+     *
+     * 三件事一起做，缺一不可：
+     *  · 出暂存队列（照片本来就没动过，纯内存）；
+     *  · 抹掉账本 —— 否则这张会既不在队列里、也不算待整理，从用户视角就是照片消失了；
+     *  · 摘掉撤销栈里对应的那条「清除」记录 —— 留着它，用户之后点「撤销」时会撤销一个
+     *    已经不在队列里的动作，队列与撤销栈从此对不上。
+     */
+    fun restoreFromStaging(imageId: Long) {
+        if (staging.items.value.none { it.id == imageId }) return
+        restoreStagedInternal(imageId)
+        persist()
+        syncState()
+    }
+
+    /** 把排队待清除的整批放回整理队列（对应参考实现的「全部还原」）。 */
+    fun restoreAllStaged() {
+        val ids = staging.items.value.map { it.id }
+        if (ids.isEmpty()) return
+        ids.forEach { restoreStagedInternal(it) }
+        persist()
+        syncState()
+    }
+
+    private fun restoreStagedInternal(imageId: Long) {
+        val image = staging.items.value.firstOrNull { it.id == imageId } ?: return
+        staging.unstage(imageId)
+        val wasThisSession = history.removeAll {
+            it.action == ReviewAction.Trash && it.image.id == imageId
+        }
+        if (wasThisSession) processedCount = (processedCount - 1).coerceAtLeast(0)
+        reviewed.unmark(imageId)
+        // 放回窗口头部：用户刚说「这张不该删」，就该立刻能重新决定它
+        queue.pushFront(image)
+    }
+
+    // ------------------------------------------------------------ 丢弃改动
+
+    /**
+     * 丢弃本次会话的全部决定，把一切还原到「进入整理页之前」。
+     *
+     * 这是纯内存回滚：照片库从头到尾没被改动过（改动只在提交时落盘），
+     * 所以不需要任何权限，也不可能丢数据。逆序回滚与逐次 [undo] 完全等价，
+     * 只是不去动窗口 —— 会话马上要结束了，没必要把照片重新排一遍。
+     *
+     * 只回滚**本次会话的 history**：暂存队列是全应用共享的（可能含上个会话留下的
+     * 待清除项），那些不属于「本次改动」，不能一起丢掉。
+     */
+    fun discardChanges() {
+        while (history.isNotEmpty()) {
+            val record = history.removeLast()
+            when (record.action) {
+                ReviewAction.Trash -> staging.unstage(record.image.id)
+                ReviewAction.Move -> pendingMoves.remove(record.image.id)
+                // 保留没有队列副作用，回滚它只是把账本和计数退回去（计数在循环外统一归零）
+                ReviewAction.Keep -> Unit
+            }
+            reviewed.unmark(record.image.id)
+        }
+        processedCount = 0
+        keptCount = 0
+        persist()
+        // 账本可能还欠着节流窗口里的几条，必须立刻结清 —— 丢弃之后立刻退出整理页，
+        // 留着没写的记录会让首页数字对不上。
+        reviewed.flush()
         syncState()
     }
 
@@ -290,9 +417,7 @@ class ReviewViewModel(
      */
     fun restart() {
         generation++
-        window.clear()
-        deferred.clear()
-        loadedThrough = 0
+        queue.clear()
         loadingPage = false
         history.clear()
         processedCount = 0
@@ -303,10 +428,15 @@ class ReviewViewModel(
         syncState()
     }
 
-    /** 跳过当前这张，放到队尾稍后再看。 */
+    /**
+     * 跳过当前这张，放到队尾稍后再看。
+     *
+     * 走 [ReviewQueueWindow.deferCurrent]（取出队首 → 追加到 deferred），
+     * 而不是自己拼两步 —— 取出规则必须与 [ReviewQueueWindow.peek] 一致，
+     * 否则滑到最后一张时会停在 deferred 上，且没有任何动作能推进它。
+     */
     fun deferCurrent() {
-        val image = advance() ?: return
-        deferred.addLast(image)
+        if (queue.deferCurrent() == null) return
         syncState()
     }
 
@@ -404,20 +534,7 @@ class ReviewViewModel(
 
     // ------------------------------------------------------------ 队列窗口
 
-    /** 队首（还没被消费的第一张）。 */
-    private fun at(index: Int): MediaImage? {
-        val windowSize = window.size
-        if (index < windowSize) return window.elementAt(index)
-        // 窗口之后、尚未加载出来的区间要留位 —— 否则「稍后再看」的那些会插到它们前面
-        val unloaded = (totalCount - loadedThrough).coerceAtLeast(0)
-        val tailStart = windowSize + unloaded
-        return if (index < tailStart) null else deferred.elementAtOrNull(index - tailStart)
-    }
-
-    private fun advance(): MediaImage? = window.removeFirstOrNull()
-
-    private fun remainingCount(): Int =
-        window.size + deferred.size + (totalCount - loadedThrough).coerceAtLeast(0)
+    private fun advance(): MediaImage? = queue.take()
 
     /**
      * 窗口见底就补齐。
@@ -433,11 +550,12 @@ class ReviewViewModel(
     private fun ensureWindow() {
         // 上一次读取已经失败：等用户显式重试（[retryLoad]），不要每次 syncState 都重撞一次
         if (_state.value.loadError) return
-        if (loadingPage || loadedThrough >= totalCount) return
-        if (window.size >= REFILL_BELOW) return
+        if (loadingPage) return
+        // 「数据源取完了」与「窗口还够用」分开判：前者决定还发不发请求，后者决定现在要不要发
+        if (!queue.needsRefill(REFILL_BELOW)) return
 
         loadingPage = true
-        val requestOffset = loadedThrough
+        val requestOffset = queue.loadedCount
         val requestGeneration = generation
         viewModelScope.launch {
             // 取消不是失败，不能冒充成「读取失败」弹给用户
@@ -457,22 +575,16 @@ class ReviewViewModel(
                 return@launch
             }
 
-            if (page.size < PAGE_SIZE) {
-                // 取不满一页 = 数据源到头了（或权限范围缩小了）。标记耗尽，别再反复请求。
-                loadedThrough = totalCount
-            } else {
-                loadedThrough += page.size
-            }
-
             // 已整理的照片不再进队列 —— 这是「已整理 / 未整理」在行为上的落点：
             // 首页数字减下去不算数，用户再进来时必须真的看不到它们。
-            // 中途的 syncState() 会继续把窗口补满（一次补不全没关系，loadedThrough 在推进），
-            // 所以一页里混着大量已整理的照片也不会卡住。
-            window.addAll(if (ignoreLedger) page else page.filterNot { reviewed.contains(it.id) })
+            // 它们被滤掉但仍然算作「已取到」，所以翻页水位照常推进，不会卡在同一个 offset。
+            queue.acceptPage(page, PAGE_SIZE) { image ->
+                ignoreLedger || !reviewed.contains(image.id)
+            }
 
             // 整页都是已整理的照片：窗口没长，但数据源还没到头 —— 立刻再补一页，
             // 否则用户看到的是转圈（preparing）而不是「下一条待整理」。
-            if (window.size < REFILL_BELOW && loadedThrough < totalCount) {
+            if (queue.needsRefill(REFILL_BELOW)) {
                 syncWindow(loadError = false)
                 ensureWindow()
                 return@launch
@@ -484,7 +596,7 @@ class ReviewViewModel(
     /**
      * 读取失败后的重试入口。
      *
-     * 只清错误标记再走一次 [syncState]：`loadedThrough` 在失败路径上从未被推进，
+     * 只清错误标记再走一次 [syncState]：翻页水位在失败路径上从未被推进，
      * 所以重试会**原地**重取失败的那一页，不会把用户已经滑过的照片再放回队列。
      */
     fun retryLoad() {
@@ -496,13 +608,13 @@ class ReviewViewModel(
     /** 只更新与窗口相关的字段，不动计数器。 */
     private fun syncWindow(loadError: Boolean) {
         _state.update {
-            val remaining = remainingCount()
+            val remaining = queue.remaining
             it.copy(
-                current = at(0),
-                next = at(1),
+                current = queue.peek(0),
+                next = queue.peek(1),
                 finished = remaining == 0,
                 // 读取失败时不能转圈：转圈在这块版面上等价于「正在整理」，而实际什么都没在发生
-                preparing = !loadError && at(0) == null && remaining > 0,
+                preparing = !loadError && queue.peek(0) == null && remaining > 0,
                 loadError = loadError,
             )
         }
@@ -510,16 +622,16 @@ class ReviewViewModel(
 
     private fun syncState() {
         _state.update {
-            val remaining = remainingCount()
-            val blocked = it.loadError && at(0) == null
+            val remaining = queue.remaining
+            val blocked = it.loadError && queue.peek(0) == null
             it.copy(
                 processed = processedCount,
-                current = at(0),
-                next = at(1),
+                current = queue.peek(0),
+                next = queue.peek(1),
                 pendingMoveCount = pendingMoves.size,
                 canUndo = history.isNotEmpty(),
                 finished = remaining == 0,
-                preparing = !blocked && at(0) == null && remaining > 0,
+                preparing = !blocked && queue.peek(0) == null && remaining > 0,
                 keptCount = keptCount,
                 // 「已经产生过非保留改动、且全部结算完」——用计数器判断，不再遍历历史
                 committed = it.committed || (pendingMoves.isEmpty() &&
@@ -578,6 +690,26 @@ class ReviewViewModel(
             if (unreachable > 0) {
                 ops.emit(strings.get(R.string.commit_move_target_skipped, unreachable))
             }
+            // 会话内新建的相册只活在内存里（见 [createAlbum]），所以冷启动恢复时
+            // 必须把快照里的目标重新挂回移动条 —— 否则用户自己建的相册会从列表上消失，
+            // 照片照样能移（队列里有），但入口没了。
+            val knownTargets = _state.value.moveTargets
+                .mapTo(HashSet()) { it.relativePath.trim('/') }
+            val restoredTargets = snapshot
+                .filter { isImageDestinationLegal(it.targetPath) }
+                .map { move ->
+                    MediaAlbum(
+                        bucketId = move.bucketId,
+                        name = move.albumName,
+                        relativePath = move.albumPath.ifBlank { move.targetPath.trim('/') },
+                        count = 0,
+                        cover = null,
+                    )
+                }
+                .filter { knownTargets.add(it.relativePath.trim('/')) }
+            if (restoredTargets.isNotEmpty()) {
+                _state.update { it.copy(moveTargets = it.moveTargets + restoredTargets) }
+            }
             // 剔除的结果必须落盘，否则下次冷启动又把它们捞回来
             persist()
             syncState()
@@ -630,6 +762,15 @@ class ReviewViewModel(
 
     companion object {
         private const val TAG = "ReviewViewModel"
+
+        /**
+         * 会话内新建相册的 bucketId 起点。
+         *
+         * 与 `LibraryViewModel.SYNTHETIC_BUCKET_BASE`（标准目录，`Long.MIN_VALUE + n`）分开，
+         * 也远在 Int32 真实 BUCKET_ID 之外 —— 快捷移动条按 `bucketId:name` 做 LazyRow key，
+         * 撞车会直接因 key 重复崩溃。
+         */
+        private const val NEW_ALBUM_BUCKET_BASE = Long.MIN_VALUE / 2
 
         fun factory(
             scope: MediaScope,

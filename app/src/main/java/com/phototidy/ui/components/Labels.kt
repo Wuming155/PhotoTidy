@@ -52,6 +52,7 @@ fun selectedLabel(count: Int): String =
 @Composable
 fun MediaScope.shortLabel(): String = when (this) {
     MediaScope.Recent -> stringResource(R.string.scope_recent)
+    MediaScope.Screenshots -> stringResource(R.string.scope_screenshots)
     is MediaScope.Month -> stringResource(R.string.month_title, year, month)
     is MediaScope.Album -> name
 }
@@ -59,6 +60,7 @@ fun MediaScope.shortLabel(): String = when (this) {
 @Composable
 fun MediaScope.optionLabel(): String = when (this) {
     MediaScope.Recent -> stringResource(R.string.scope_recent_all)
+    MediaScope.Screenshots -> stringResource(R.string.scope_screenshots_all)
     is MediaScope.Month -> stringResource(R.string.month_title, year, month)
     is MediaScope.Album -> name
 }

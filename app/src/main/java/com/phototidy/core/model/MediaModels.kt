@@ -97,6 +97,19 @@ sealed interface MediaScope {
         override val key: String = "recent"
     }
 
+    /**
+     * 截图范围。
+     *
+     * 参考实现（Slidebox）把截图当成与「视频 / 重复 / 相机」并列的一等分类，
+     * 而它靠的是硬编码的桶显示名 `"Screenshots"`。这里刻意**不**跟着走 ——
+     * 桶名是系统给的**显示名**，中文 ROM 上会被本地化成「截图」，
+     * 按名字过滤会直接漏掉整批照片（本项目在 `computeTargetPath` 上已经踩过一次同名坑）。
+     * 改用 `RELATIVE_PATH` 前缀匹配（见 `MediaStoreRepository.filter`）。
+     */
+    data object Screenshots : MediaScope {
+        override val key: String = "screenshots"
+    }
+
     data class Month(val year: Int, val month: Int) : MediaScope {
         override val key: String = "month:$year:$month"
     }
@@ -123,6 +136,7 @@ sealed interface MediaScope {
         fun decode(raw: String?): MediaScope? = when {
             raw.isNullOrBlank() -> null
             raw == "recent" -> MediaScope.Recent
+            raw == "screenshots" -> MediaScope.Screenshots
             raw.startsWith("month:") -> raw.removePrefix("month:").split(":").let { parts ->
                 val year = parts.getOrNull(0)?.toIntOrNull() ?: return null
                 val month = parts.getOrNull(1)?.toIntOrNull() ?: return null

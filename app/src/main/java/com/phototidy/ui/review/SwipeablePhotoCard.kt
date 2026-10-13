@@ -83,6 +83,8 @@ fun SwipeablePhotoCard(
     onAction: (ReviewAction, MediaAlbum?) -> Unit,
     onUndo: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 手势总开关。提交进行中时传 false —— 那时再改队列会让「已提交」的语义对不上。 */
+    interactive: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
@@ -200,13 +202,19 @@ fun SwipeablePhotoCard(
 
     suspend fun flyOutTo(target: Offset) {
         busy = true
-        runCatching { settleTo(target, PhotoTidyMotion.dismissal()) }
-        busy = false
+        // 用 try/finally 而不是 runCatching：后者会把 CancellationException 一起吞掉，
+        // 于是「这一下飞出被取消」之后代码继续往下跑，**照样**把动作派发出去。
+        // finally 既保证 busy 复位，又让取消正常向上传播（协程就此结束，动作不会派发）。
+        try {
+            settleTo(target, PhotoTidyMotion.dismissal())
+        } finally {
+            busy = false
+        }
     }
 
     // 外部触发的「移动到相册」：卡片往下滑出屏幕，用空间位移表达「放进文件夹」
-    LaunchedEffect(moveTicket) {
-        if (moveTicket == 0L || moveTarget == null) return@LaunchedEffect
+    LaunchedEffect(moveTicket, interactive) {
+        if (moveTicket == 0L || moveTarget == null || !interactive) return@LaunchedEffect
         // busy 为真说明上一张卡片的飞出动画还在跑：先等它结束再处理本次「移动」，
         // 而不是直接 return —— 直接 return 会静默吞掉 onAction(Move)，并让 moveTarget 卡在非空态。
         if (busy) snapshotFlow { busy }.first { !it }
@@ -214,7 +222,7 @@ fun SwipeablePhotoCard(
         onAction(ReviewAction.Move, moveTarget)
     }
 
-    val gestureEnabled = image != null && !busy
+    val gestureEnabled = image != null && !busy && interactive
 
     Box(
         modifier = modifier

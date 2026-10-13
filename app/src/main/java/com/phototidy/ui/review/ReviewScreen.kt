@@ -138,11 +138,19 @@ fun ReviewScreen(
     onRestart: () -> Unit,
     onDefer: () -> Unit,
     onRetryLoad: () -> Unit,
+    /** 会话内新建相册；返回新相册（null = 名字不可用，弹窗自己会给出错误提示）。 */
+    onCreateAlbum: (String) -> MediaAlbum?,
+    /** 把一张已排队待清除的照片放回整理队列（会话内回收站的「还原」）。 */
+    onRestoreStaged: (Long) -> Unit,
+    /** 把排队待清除的整批放回整理队列。 */
+    onRestoreAllStaged: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var scopePickerOpen by remember { mutableStateOf(false) }
     var moreMenuOpen by remember { mutableStateOf(false) }
     var commitDialogVisible by remember { mutableStateOf(false) }
+    var newAlbumOpen by remember { mutableStateOf(false) }
+    var stagingOpen by remember { mutableStateOf(false) }
 
     // 「移动到相册」需要驱动卡片做一个下滑飞出动画，用 ticket 触发避免重复响应
     var moveTicket by remember { mutableLongStateOf(0L) }
@@ -282,6 +290,15 @@ fun ReviewScreen(
                             leadingIcon = { Icon(Icons.Rounded.AutoAwesome, null) },
                             onClick = { moreMenuOpen = false; onOpenHelp() },
                         )
+                        // 整理中的「回收站」：已排队待清除的照片。它们还没落到系统相册，
+                        // 所以这里是反悔窗口 —— 误删了几十张不必再一张张往下滑撤销
+                        // （撤销栈是后进先出的，误删的那批不在栈顶时根本够不着）。
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.menu_staging, state.stagedCount)) },
+                            leadingIcon = { Icon(Icons.Rounded.DeleteOutline, null) },
+                            enabled = state.stagedCount > 0,
+                            onClick = { moreMenuOpen = false; stagingOpen = true },
+                        )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.menu_defer)) },
                             leadingIcon = { Icon(Icons.Rounded.SkipNext, null) },
@@ -339,6 +356,9 @@ fun ReviewScreen(
                                 hapticsEnabled = hapticsEnabled,
                                 sensitivity = sensitivity,
                                 showNextPreview = showNextPreview,
+                                // 提交正在跑（多半是挂在系统授权框上）：此刻再改队列，
+                                // 新做的决定不在本次请求的范围内，提交完成页的数字也会对不上。
+                                interactive = !state.submitting,
                                 moveTicket = moveTicket,
                                 moveTarget = moveTarget,
                                 onAction = handleCardAction,
@@ -387,10 +407,13 @@ fun ReviewScreen(
             )
 
             // ---------------------------------------------------------- 动作条
+            // busy 同时带上 submitting：提交期间 keep / trash / undo 都必须停手 ——
+            // 改动是在内存里排队的，而提交只对**发起那一刻**的队列负责，
+            // 允许边提交边改会让「已提交」的语义和队列状态自相矛盾。
             ReviewActionBar(
                 canUndo = state.canUndo,
                 decisionsEnabled = canDecide,
-                busy = state.preparing,
+                busy = state.preparing || state.submitting,
                 onUndo = onUndo,
                 onKeep = onKeep,
                 onTrash = onTrash,
@@ -402,8 +425,9 @@ fun ReviewScreen(
                 // -------------------------------------------------------- 快捷移动
                 AlbumQuickMoveBar(
                     albums = state.moveTargets,
-                    enabled = !state.preparing,
+                    enabled = !state.preparing && !state.submitting,
                     onMove = handleQuickMove,
+                    onNewAlbum = { newAlbumOpen = true },
                 )
             }
         }
@@ -462,6 +486,37 @@ fun ReviewScreen(
             options = scopeOptions,
             onDismiss = handleDismissPicker,
             onPick = handlePickScope,
+        )
+    }
+
+    // ---------------------------------------------------------- 新建相册
+    // 建完立刻投递当前这张（复刻参考实现的节奏，见 notes §1）：用户感知是
+    // 「新建相册」与「移动照片」一步完成，不用再点一次移动条。
+    if (newAlbumOpen) {
+        NewAlbumDialog(
+            existingNames = state.moveTargets.map { it.name },
+            onDismiss = { newAlbumOpen = false },
+            onCreate = { name ->
+                val album = onCreateAlbum(name)
+                if (album != null) {
+                    newAlbumOpen = false
+                    handleQuickMove(album)
+                }
+                album != null
+            },
+        )
+    }
+
+    // ---------------------------------------------------------- 整理中回收站
+    if (stagingOpen) {
+        StagedTrashSheet(
+            items = state.stagedItems,
+            onRestoreOne = onRestoreStaged,
+            onRestoreAll = {
+                onRestoreAllStaged()
+                stagingOpen = false
+            },
+            onDismiss = { stagingOpen = false },
         )
     }
 }

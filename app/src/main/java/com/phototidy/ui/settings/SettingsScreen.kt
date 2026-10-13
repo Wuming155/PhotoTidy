@@ -290,16 +290,6 @@ fun SettingsScreen(
             )
         }
 
-        item(key = "empty-albums") {
-            SwitchRow(
-                icon = Icons.Rounded.PhotoSizeSelectLarge,
-                title = stringResource(R.string.settings_empty_albums_title),
-                subtitle = stringResource(R.string.settings_empty_albums_desc),
-                checked = settings.showEmptyAlbums,
-                onCheckedChange = { value -> onUpdate { it.copy(showEmptyAlbums = value) } },
-            )
-        }
-
         item(key = "privacy") {
             SettingsCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {

@@ -24,11 +24,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.DeleteForever
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.RestoreFromTrash
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -105,6 +108,15 @@ fun TrashScreen(
     var confirmDelete by remember { mutableStateOf<List<MediaImage>?>(null) }
     /** 「全选」点了但列表还没读完：等补全完成后再兑现选中。 */
     var selectAllPending by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    /**
+     * 按下的批量快捷动作。
+     *
+     * 必须先与「全选」共用同一套补页机制：[loadAllTrash] 是分页的，
+     * 直接对「已加载的那几页」执行就等于「清了一部分却说清空了」——
+     * 那比没有这个功能更危险（用户以为回收站空了，其实里面还躺着几百张）。
+     */
+    var bulkAction by remember { mutableStateOf<BulkAction?>(null) }
     /**
      * 每格当前在根坐标系里的位置，只给划选的命中测试用。
      *
@@ -161,20 +173,47 @@ fun TrashScreen(
 
     // 「全选」在分页场景下要先补全剩余页。这里同时负责收口：
     // 只要还挂着 pending 就持续补，直到读完（兑现全选）、失败（放弃，不假装选全）或用户撤销。
-    LaunchedEffect(selectAllPending, loadingMore, loadError, systemTrash.size, trashCount) {
+    //
+    // 批量快捷动作（全部还原 / 清空回收站）走的是**同一条**通道：它们同样要求
+    // 「读到全部」才允许执行，否则就是拿一部分冒充全部。
+    LaunchedEffect(selectAllPending, bulkAction, loadingMore, loadError, systemTrash.size, trashCount) {
         if (!selectAllPending) return@LaunchedEffect
         if (loadError) {
+            // 读不全就什么都不做。宁可让用户重试，也不能对不完整的列表执行「清空」。
             selectAllPending = false
+            bulkAction = null
             return@LaunchedEffect
         }
         if (systemTrash.size >= trashCount) {
-            selectedIds = systemTrash.map { it.id }.toSet()
+            val all = systemTrash
+            when (bulkAction) {
+                BulkAction.RestoreAll -> {
+                    selectedIds = emptySet()
+                    onRestore(all)
+                }
+
+                // 清空是不可逆操作：交给同一个确认框，让用户看到准确张数与占用空间
+                BulkAction.DeleteAll -> {
+                    selectedIds = emptySet()
+                    confirmDelete = all
+                }
+
+                null -> selectedIds = all.map { it.id }.toSet()
+            }
             selectAllPending = false
+            bulkAction = null
             return@LaunchedEffect
         }
         // 还没读完且当前空闲就继续补。放在这里而不是只点一次，是因为点「全选」时
         // 可能正有一页在加载，那一次 onLoadAll 会被挡掉 —— 不重试就永远补不齐。
         if (!loadingMore) onLoadAll()
+    }
+
+    /** 记下要做的批量动作，剩下的交给上面那条补页通道。 */
+    fun startBulk(action: BulkAction) {
+        if (trashCount == 0) return
+        bulkAction = action
+        selectAllPending = true
     }
 
     val onSelectAll: () -> Unit = {
@@ -220,6 +259,37 @@ fun TrashScreen(
                                 ),
                             )
                         }
+                        Box {
+                            IconButton(onClick = { menuOpen = true }) {
+                                Icon(
+                                    Icons.Rounded.MoreVert,
+                                    contentDescription = stringResource(R.string.trash_more_actions),
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = menuOpen,
+                                onDismissRequest = { menuOpen = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.trash_restore_all)) },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.RestoreFromTrash, null)
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        startBulk(BulkAction.RestoreAll)
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.trash_empty_all)) },
+                                    leadingIcon = { Icon(Icons.Rounded.DeleteForever, null) },
+                                    onClick = {
+                                        menuOpen = false
+                                        startBulk(BulkAction.DeleteAll)
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
                 Text(
@@ -231,6 +301,16 @@ fun TrashScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // 批量动作在补页期间必须给反馈：回收站可能有几千张，
+                // 用户点了「清空」之后界面几秒没动静，会以为按钮坏了并反复点。
+                if (bulkAction != null && selectAllPending) {
+                    Text(
+                        text = stringResource(R.string.trash_bulk_preparing),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
             }
         }
 
@@ -446,6 +526,9 @@ private fun TrashTile(
 
 /** 划选模式。由起手那一格决定，整段拖动沿用同一种。 */
 private enum class PaintMode { Select, Deselect }
+
+/** 回收站的批量快捷动作。两个都要求「列表已读全」才允许执行。 */
+private enum class BulkAction { RestoreAll, DeleteAll }
 
 @Composable
 private fun SystemTrashActions(

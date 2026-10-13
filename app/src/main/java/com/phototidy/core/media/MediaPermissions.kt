@@ -29,6 +29,9 @@ enum class MediaAccess {
 
 object MediaPermissions {
 
+    // READ_MEDIA_IMAGES 是 API 33 引入的常量，而 minSdk 是 31 ——
+    // 运行时按 SDK_INT 分支取值，所以这里引用它是有意的（编译器只看到字面量内联）。
+    @Suppress("InlinedApi")
     private const val READ_MEDIA_IMAGES = Manifest.permission.READ_MEDIA_IMAGES
     private const val READ_MEDIA_VISUAL_USER_SELECTED =
         "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"

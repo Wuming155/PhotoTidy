@@ -6,6 +6,7 @@ import com.phototidy.core.media.MediaOpResult
 import com.phototidy.core.media.MediaRepository
 import com.phototidy.core.media.ReviewedLedger
 import com.phototidy.core.media.SessionStore
+import com.phototidy.core.media.isImageDestinationLegal
 import com.phototidy.core.model.MediaImage
 import com.phototidy.core.model.PendingMove
 import com.phototidy.core.media.StagingTrash
@@ -19,6 +20,8 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -44,7 +47,7 @@ class ReviewViewModelTest {
     private class FakeSessionStore : SessionStore {
         private val staging = mutableListOf<Long>()
         private val pending = mutableMapOf<String, List<PendingMove>>()
-        private val reviewed = mutableListOf<Long>()
+        private val reviewed = linkedSetOf<Long>()
         override fun saveStaging(imageIds: List<Long>) { staging.clear(); staging.addAll(imageIds) }
         override fun loadStaging(): List<Long> = staging.toList()
         override fun clearStaging() = staging.clear()
@@ -53,9 +56,13 @@ class ReviewViewModelTest {
         }
         override fun loadPendingMoves(scopeKey: String): List<PendingMove> = pending[scopeKey].orEmpty()
         override fun clearPendingMoves(scopeKey: String) { pending.remove(scopeKey) }
-        override fun saveReviewed(imageIds: List<Long>) {
-            reviewed.clear(); reviewed.addAll(imageIds)
+
+        /** 与生产实现同口径：先把本批取消的删掉，再加入本批新增的。 */
+        override fun appendReviewed(marked: Collection<Long>, unmarked: Collection<Long>) {
+            reviewed.removeAll(unmarked.toSet())
+            reviewed.addAll(marked)
         }
+
         override fun loadReviewed(): List<Long> = reviewed.toList()
     }
 
@@ -84,6 +91,7 @@ class ReviewViewModelTest {
     private fun makeVm(
         repo: MediaRepository = FakeMediaRepository(),
         session: SessionStore = FakeSessionStore(),
+        staging: StagingTrash = StagingTrash(),
         scope: MediaScope = MediaScope.Recent,
         totalCount: Int = 20,
         /** 待整理数（进度条分母）。默认与总数相同 = 这个范围一张都还没整理过。 */
@@ -93,7 +101,6 @@ class ReviewViewModelTest {
         loader: (suspend (Int, Int) -> List<MediaImage>)? = null,
         onCommitted: () -> Unit = {},
     ): ReviewViewModel {
-        val staging = StagingTrash()
         val strings = object : StringProvider {
             override fun get(resId: Int, vararg args: Any) = "msg"
         }
@@ -274,6 +281,33 @@ class ReviewViewModelTest {
     // ------------------------------------------------------ 已整理 / 未整理
 
     @Test
+    fun `a deferred photo is still actionable once the rest of the scope is drained (C1)`() {
+        // 「稍后再看」的照片排在队尾，但滑到最后一张时它必须**真的能操作**。
+        // 曾经「读取队首位置」与「消费队首」的口径不一致：屏幕上明明有那张照片，
+        // keep / trash / move 却全部静默返回，进度也永远走不完 —— 会话直接卡死在这里。
+        val vm = makeVm(
+            totalCount = 3,
+            loaderImages = (1L..3L).map { makeImage(it) },
+        )
+
+        vm.deferCurrent()
+        assertEquals("跳过之后队首是第 2 张", 2L, vm.state.value.current?.id)
+
+        vm.keep()
+        vm.keep()
+        assertEquals(2, vm.state.value.processed)
+
+        // 队列里只剩被 defer 的那张：它必须重新成为可操作对象，而不是卡在屏幕上
+        assertFalse(vm.state.value.finished)
+        assertEquals(1L, vm.state.value.current?.id)
+
+        vm.keep()
+
+        assertEquals("对 deferred 照片执行 keep 必须推进计数", 3, vm.state.value.processed)
+        assertTrue(vm.state.value.finished)
+    }
+
+    @Test
     fun `keep is recorded in the ledger and survives a restart of the app`() {
         // 「保留」不改照片库，所以它必须留下一条账 —— 否则用户滑过的照片下次会原封不动
         // 地重新排队，首页数字也永远停在「一共有多少张」。
@@ -424,5 +458,140 @@ class ReviewViewModelTest {
         assertEquals(1, vm.state.value.pendingMoveCount)
         assertEquals(1, session.loadPendingMoves(MediaScope.Recent.key).size)
         assertEquals(1, committedCallbacks)
+    }
+
+    // ------------------------------------------------------ 新建相册
+
+    @Test
+    fun `new album becomes a move target and is immediately usable`() {
+        val vm = makeVm()
+        val album = vm.createAlbum("旅行")
+
+        assertNotNull(album)
+        assertTrue(vm.state.value.moveTargets.any { it.name == "旅行" })
+        // 落点必须是系统允许的目录，否则排好队、点提交，换来的是一句底层异常
+        assertTrue(isImageDestinationLegal(album!!.relativePath))
+
+        // 建完立刻投递：当前这张进待移动表，目标就是新相册
+        vm.moveTo(album)
+        assertEquals(1, vm.state.value.pendingMoveCount)
+    }
+
+    @Test
+    fun `new album rejects blank and duplicate names`() {
+        val vm = makeVm()
+        // 已有的真实相册（这里用初始移动目标模拟）不能被重复创建
+        val first = vm.createAlbum("旅行")
+        assertNotNull(first)
+        assertNull(vm.createAlbum(" 旅行 "))
+        assertNull(vm.createAlbum("   "))
+        assertNull(vm.createAlbum("a/b"))
+        // 失败不能把脏目标留在列表里
+        assertEquals(1, vm.state.value.moveTargets.size)
+    }
+
+    // ------------------------------------------------- 整理中回收站 / 丢弃改动
+
+    @Test
+    fun `restoring one staged photo puts it back in the queue`() {
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val vm = makeVm(
+            session = session,
+            reviewed = ledger,
+            totalCount = 3,
+            loaderImages = (1L..3L).map { makeImage(it) },
+        )
+        vm.trash()
+        vm.trash()
+        assertEquals(2, vm.state.value.stagedCount)
+
+        vm.restoreFromStaging(1L)
+
+        assertEquals(1, vm.state.value.stagedCount)
+        // 放回队列头部，用户立刻能重新决定它
+        assertEquals(1L, vm.state.value.current?.id)
+        // 账本必须一起回退，否则这张会既不在队列里也不算待整理 —— 从用户视角就是消失了
+        assertFalse(ledger.contains(1L))
+        // 撤销栈里那条「清除」也摘掉了：撤销栈应该只剩「第 2 张」那一条，
+        // 再撤一次退回的是它，而不是一个已经不在队列里的动作
+        assertTrue(vm.state.value.canUndo)
+        vm.undo()
+        assertEquals(0, vm.state.value.stagedCount)
+        assertEquals(2L, vm.state.value.current?.id)
+    }
+
+    @Test
+    fun `restore all staged empties the queue and reverts the ledger`() {
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val vm = makeVm(
+            session = session,
+            reviewed = ledger,
+            totalCount = 3,
+            loaderImages = (1L..3L).map { makeImage(it) },
+        )
+        vm.trash()
+        vm.trash()
+
+        vm.restoreAllStaged()
+
+        assertEquals(0, vm.state.value.stagedCount)
+        assertEquals(0, session.loadStaging().size)
+        assertFalse(ledger.contains(1L))
+        assertFalse(ledger.contains(2L))
+    }
+
+    @Test
+    fun `discard changes rewinds the whole session and leaves nothing on disk`() {
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val vm = makeVm(
+            session = session,
+            reviewed = ledger,
+            totalCount = 3,
+            loaderImages = (1L..3L).map { makeImage(it) },
+        )
+        vm.keep()
+        vm.trash()
+        vm.moveTo(moveAlbum)
+        assertEquals(3, vm.state.value.pendingTotal + vm.state.value.keptCount)
+
+        vm.discardChanges()
+
+        // 三类决定一起回滚：队列空、账本空、落盘快照空
+        assertEquals(0, vm.state.value.stagedCount)
+        assertEquals(0, vm.state.value.pendingMoveCount)
+        assertEquals(0, vm.state.value.keptCount)
+        assertEquals(0, vm.state.value.processed)
+        assertEquals(0, session.loadStaging().size)
+        assertEquals(0, session.loadPendingMoves(MediaScope.Recent.key).size)
+        assertFalse(ledger.contains(1L))
+        assertFalse(vm.state.value.canUndo)
+    }
+
+    @Test
+    fun `discard changes only rewinds this session, not the shared staging queue`() {
+        // 暂存队列是全应用共享的（冷启动会把上个会话的待清除项接回来）。
+        // 「丢弃本次改动」只该回滚本次会话做过的决定 —— 把别人的队列一起清掉
+        // 等于替用户撤销了他根本没在本轮做出的选择。
+        val session = FakeSessionStore()
+        val ledger = ReviewedLedger(session)
+        val staging = StagingTrash()
+        staging.stage(makeImage(99L))
+        val vm = makeVm(
+            session = session,
+            reviewed = ledger,
+            staging = staging,
+            totalCount = 3,
+            loaderImages = (1L..3L).map { makeImage(it) },
+        )
+        vm.trash()
+        assertEquals(2, vm.state.value.stagedCount)
+
+        vm.discardChanges()
+
+        assertEquals(1, vm.state.value.stagedCount)
+        assertEquals(listOf(99L), session.loadStaging())
     }
 }

@@ -203,6 +203,79 @@ class MediaStoreRepository(
     }
 
     /**
+     * 截图范围的统计：一共多少张、其中还没整理的有多少张。
+     *
+     * 为什么不塞进 [loadOverview] 的循环里顺手算：
+     * 那里刻意避免逐行 `getString(RELATIVE_PATH)`（12.5 万行就是 12.5 万次字符串分配，
+     * 全砸在冷启动最慢的那条扫描路径上）。改成一条带 LIKE 的**独立查询**、只取 `_ID` 一列，
+     * 匹配到的行数（截图通常几百张）与照片库规模无关。
+     *
+     * 与 `MediaScope.Screenshots` 的 SQL 条件共用同一组常量，口径不可能分叉。
+     */
+    suspend fun loadScreenshotStats(
+        isReviewed: (Long) -> Boolean = { false },
+    ): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        var total = 0
+        var remaining = 0
+        openCursor(
+            selection = "$VISIBLE AND $SCREENSHOT_PATH_CLAUSE",
+            selectionArgs = SCREENSHOT_PATH_ARGS,
+            onlyTrashed = false,
+            onlyIdColumn = true,
+        )?.use { c ->
+            val idCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            while (c.moveToNext()) {
+                total++
+                if (!isReviewed(c.getLong(idCol))) remaining++
+            }
+        }
+        total to remaining
+    }
+
+    /**
+     * 找出**文件大小相同**的照片 id（重复检测的粗筛）。
+     *
+     * 分两趟游标：
+     *  1) 第一趟只数「每个大小出现过几次」，用 `HashMap<Long, Int>`；
+     *  2) 只有当确实存在 `count >= 2` 的大小时，才走第二趟把那些 id 收出来。
+     *
+     * 为什么不分一趟就 `HashMap<Long, MutableList<Long>>`：12.5 万张照片会造出 12.5 万个
+     * 单元素 ArrayList（每张照片一个），是几十 MB 的瞬时垃圾；而绝大多数照片库
+     * 根本没有重复 —— 第二趟在正常情况下压根不会跑。
+     *
+     * 不做 SQL `GROUP BY`：需要拼原始 SQL 片段，各厂商 MediaProvider 行为不一致，
+     * 这个坑本项目已经踩过一次（见 [loadOverview] 的注释）。
+     */
+    suspend fun findSizeCandidates(): Map<Long, List<Long>> = withContext(Dispatchers.IO) {
+        val counts = HashMap<Long, Int>()
+        openCursor(selection = VISIBLE, onlyTrashed = false, projection = ID_SIZE)?.use { c ->
+            val idCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            val sizeCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+            while (c.moveToNext()) {
+                val size = c.getLong(sizeCol)
+                // 大小为 0 的照片（统计不到的）不能当重复的证据
+                if (size <= 0L) continue
+                counts[size] = (counts[size] ?: 0) + 1
+            }
+        }
+        val colliding = counts.filterValues { it >= 2 }.keys
+        if (colliding.isEmpty()) return@withContext emptyMap()
+
+        val out = HashMap<Long, MutableList<Long>>(colliding.size * 2)
+        openCursor(selection = VISIBLE, onlyTrashed = false, projection = ID_SIZE)?.use { c ->
+            val idCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            val sizeCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+            while (c.moveToNext()) {
+                val size = c.getLong(sizeCol)
+                if (size !in colliding) continue
+                val id = c.getLong(idCol)
+                (out[size] ?: ArrayList<Long>(4).also { out[size] = it }).add(id)
+            }
+        }
+        out
+    }
+
+    /**
      * 取某一范围内的一页照片。
      *
      * 分页落在 **SQL 侧**（`QUERY_ARG_LIMIT` / `QUERY_ARG_OFFSET`，API 30+ 由 MediaProvider 直接支持），
@@ -416,6 +489,14 @@ class MediaStoreRepository(
         is MediaScope.Album ->
             "$VISIBLE AND ${MediaStore.Images.Media.BUCKET_ID} = ?" to arrayOf(bucketId.toString())
 
+        // 截图：按 RELATIVE_PATH 前缀匹配，不按桶显示名（见 MediaScope.Screenshots 的注释）。
+        // 两个「兜底」列出的 ROM 差异：
+        //  · AOSP / 多数 ROM 落 `Pictures/Screenshots`；
+        //  · 少数 ROM（含部分国产定制）把截图丢进 `DCIM/Screenshots`。
+        // SQLite 的 LIKE 对 ASCII 默认大小写不敏感，`pictures/screenshots` 这类写法也能命中。
+        MediaScope.Screenshots ->
+            "$VISIBLE AND $SCREENSHOT_PATH_CLAUSE" to SCREENSHOT_PATH_ARGS
+
         is MediaScope.Month -> {
             val zone = ZoneId.systemDefault()
             val start = YearMonth.of(year, month).atDay(1).atStartOfDay(zone)
@@ -430,9 +511,14 @@ class MediaStoreRepository(
     /**
      * 统一的游标入口。
      *
-     * [onlyTrashed] 三态：true = 只看回收站，false = 排除回收站，null = 两者都要。
+     * [onlyTrashed] 三态：true = 只看回收站（`MATCH_ONLY`），false = 排除回收站（`MATCH_EXCLUDE`），
+     * **null = 不传这个查询参数**，把行为交回平台默认。
      *
-     * ⚠️ 回收站必须通过查询参数来要，不能只写在 selection 里。
+     * ⚠️ 别把 null 读成「两者都要」——「两者都要」必须显式传 `MATCH_INCLUDE`。
+     * 目前只有 [imagesByIds] 传 null，而它的调用方（会话恢复、待移动对账、重复检测）
+     * 关心的都只是**没被回收**的照片，所以行为是对的；但下一个来这里加调用的人必须知道这一点。
+     *
+     * ⚠️ 另一个坑：回收站必须通过查询参数来要，不能只写在 selection 里。
      * MediaProvider 默认对查询**整体排除** is_trashed=1 的项，
      * 实测「selection 写 IS_TRASHED != 0」永远返回空 —— 于是应用内的
      * 「系统回收站」一栏看起来永远是空的，哪怕照片确实已经在里面。
@@ -444,6 +530,8 @@ class MediaStoreRepository(
         limit: Int? = null,
         offset: Int? = null,
         onlyIdColumn: Boolean = false,
+        /** 自定义投影（例如只取 `_ID` + `SIZE`）；缺省用完整 [PROJECTION]。 */
+        projection: Array<String>? = null,
     ): Cursor? {
         val args = Bundle().apply {
             if (onlyTrashed != null) {
@@ -462,7 +550,12 @@ class MediaStoreRepository(
             if (limit != null) putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
             if (offset != null) putInt(ContentResolver.QUERY_ARG_OFFSET, offset)
         }
-        return resolver.query(collection, if (onlyIdColumn) ID_ONLY else PROJECTION, args, null)
+        val columns = when {
+            projection != null -> projection
+            onlyIdColumn -> ID_ONLY
+            else -> PROJECTION
+        }
+        return resolver.query(collection, columns, args, null)
     }
 
     // ------------------------------------------------------------------ 内部
@@ -587,7 +680,20 @@ class MediaStoreRepository(
             "COALESCE(NULLIF(${MediaStore.MediaColumns.DATE_TAKEN}, 0), " +
                 "${MediaStore.MediaColumns.DATE_ADDED} * 1000)"
 
+        /** 截图目录判据；与 [isScreenshotPath] 的两个前缀必须完全一致。 */
+        const val SCREENSHOT_PATH_CLAUSE =
+            "(${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? OR " +
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?)"
+
+        val SCREENSHOT_PATH_ARGS = arrayOf(
+            "$SCREENSHOT_PATH_PICTURES%",
+            "$SCREENSHOT_PATH_DCIM%",
+        )
+
         val ID_ONLY = arrayOf(MediaStore.MediaColumns._ID)
+
+        /** 重复检测的粗筛只需要这两列：不物化任何照片对象。 */
+        val ID_SIZE = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.SIZE)
 
         val PROJECTION = arrayOf(
             MediaStore.MediaColumns._ID,
@@ -642,6 +748,29 @@ internal fun monthWindowAt(epochMillis: Long, zone: ZoneId): MonthWindow {
 
 /** 共享存储里图片唯一被允许的两棵顶层子树之一（另一棵是 `DCIM`）。 */
 private const val IMAGE_ROOT = "Pictures"
+
+/** 截图目录的两种前缀（末尾不带 `/`）：AOSP 用前者，少数定制 ROM 用后者。 */
+internal const val SCREENSHOT_PATH_PICTURES = "Pictures/Screenshots"
+internal const val SCREENSHOT_PATH_DCIM = "DCIM/Screenshots"
+
+/**
+ * 这张照片算不算截图 —— 只看**路径前缀**，不看桶显示名。
+ *
+ * 参考实现（Slidebox）硬编码了桶显示名 `"Screenshots"`，那在中文 ROM 上会直接失效
+ * （桶名被本地化成「截图」）。路径是目录的唯一身份，名字不是 —— 这条教训本项目
+ * 在 `standardDirsMissing` / `computeTargetPath` 上已经付过两次学费。
+ *
+ * 大小写不敏感：`RELATIVE_PATH` 反映设备上的真实目录，不该因为设备写成 `pictures/` 就漏掉。
+ * 前缀后面必须紧跟 `/` 或到头：否则 `Pictures/ScreenshotsBackup` 也会被误判成截图。
+ */
+internal fun isScreenshotPath(relativePath: String): Boolean {
+    val path = relativePath.trim('/')
+    val lower = path.lowercase()
+    return listOf(SCREENSHOT_PATH_PICTURES, SCREENSHOT_PATH_DCIM).any { prefix ->
+        val p = prefix.lowercase()
+        lower == p || lower.startsWith("$p/")
+    }
+}
 
 /**
  * 这个相对路径是不是图片的**合法落点**。
@@ -705,3 +834,43 @@ internal fun standardDirsMissing(
     val taken = existing.map { it.relativePath.trim('/').lowercase() }.toSet()
     return standard.filterNot { (_, path) -> path.trim('/').lowercase() in taken }
 }
+
+// ---------------------------------------------------------------- 新建相册
+
+/** 相册名不能用的原因。UI 层据此选提示文案，`core/` 里不留任何字面量。 */
+enum class AlbumNameIssue { Empty, IllegalChars, Duplicate }
+
+/**
+ * 新建相册时对名字的校验。
+ *
+ * **必须在客户端先拦**（参考实现也是这么做的：拿卷内已有名字集合做 `contains` 判断）。
+ * 把重名丢给系统去报错，用户看到的是一句没人看得懂的底层异常，而且错误来得比输入慢半拍。
+ *
+ * 返回 `null` 表示名字可用。
+ *
+ * 重名判定大小写不敏感：`FUSE`/`MediaProvider` 下层文件系统在多数设备上就不区分大小写，
+ * 放行 `Cat` 与 `cat` 只会在磁盘上撞成一个目录 —— 那比直接拦下更让人困惑。
+ */
+fun newAlbumIssue(rawName: String, existingNames: Collection<String>): AlbumNameIssue? {
+    val name = rawName.trim()
+    return when {
+        name.isEmpty() -> AlbumNameIssue.Empty
+        name.any { it == '/' || it == '\\' || it.isISOControl() } -> AlbumNameIssue.IllegalChars
+        existingNames.any { it.trim().equals(name, ignoreCase = true) } -> AlbumNameIssue.Duplicate
+        else -> null
+    }
+}
+
+/**
+ * 新建相册的目标路径：统一落在 `Pictures/` 下。
+ *
+ * 为什么不像系统标准目录那样给「DCIM/ 或 Pictures/」两个选择：
+ * 这一屏是「我正看着照片，想立刻给它找个新地方」—— 多一个位置选择就是多一次分心，
+ * 而 `Pictures/` 是 `RELATIVE_PATH` 校验里与 `DCIM` 并列的合法根，落进去系统相册必然看得见。
+ *
+ * 空目录不会凭空出现：MediaStore 里没有「目录」这种实体，目录由第一张照片的
+ * `RELATIVE_PATH` 带出来。所以「创建相册」在这一版里等价于「把这张照片投进这个新目录」——
+ * 这也正是参考实现的用户感知（建完即投递，不用再点一次移动条）。
+ */
+fun newAlbumPath(name: String): String = "$IMAGE_ROOT/${name.trim().trim('/')}"
+
