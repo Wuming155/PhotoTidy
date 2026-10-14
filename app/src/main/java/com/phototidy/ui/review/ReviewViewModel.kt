@@ -11,7 +11,7 @@ import com.phototidy.R
 import com.phototidy.core.media.MediaOpCoordinator
 import com.phototidy.core.media.MediaRepository
 import com.phototidy.core.media.computeTargetPath
-import com.phototidy.core.media.isImageDestinationLegal
+import com.phototidy.core.media.isMediaDestinationLegal
 import com.phototidy.core.media.isOrganizationSourcePath
 import com.phototidy.core.media.isSystemMoveTargetPath
 import com.phototidy.core.media.newAlbumIssue
@@ -296,7 +296,7 @@ class ReviewViewModel(
             Log.w(TAG, "moveTo ignored: expected imageId $imageId but current is ${current.id}")
             return
         }
-        val targetPath = computeTargetPath(album)
+        val targetPath = computeTargetPath(album, current.isVideo)
         // 目标路径与照片当前所在目录一致：直接视同为已归位（Keep），不产生冗余 PendingMove
         if (current.relativePath.trim('/') == targetPath.trim('/')) {
             keep(current.id)
@@ -378,7 +378,7 @@ class ReviewViewModel(
             // 哨兵区间与「系统标准目录」错开，且离 Int32 的真实 BUCKET_ID 极远
             bucketId = NEW_ALBUM_BUCKET_BASE - (++newAlbumSeq),
             name = name,
-            relativePath = newAlbumPath(name),
+            relativePath = newAlbumPath(name, isVideo = currentItem()?.isVideo == true),
             count = 0,
             cover = null,
         )
@@ -835,8 +835,8 @@ class ReviewViewModel(
      * 另外两类也必须在这里剔除 —— 它们会让队列**永久卡死**：提交按钮一直亮着，
      * 用户每次点提交都撞同一堵墙，而队列一条都清不掉。
      *  · 照片已经躺在目标目录里：这次移动其实早就完成了（提交中途被杀进程就会留下这种队列）。
-     *  · 落点被系统禁止：老版本会把 `Download/` 这类目录当成移动目标，而 MediaStore 对图片
-     *    只接受 `DCIM/` 与 `Pictures/` 两棵子树（见 [isImageDestinationLegal]），
+     *  · 落点被系统禁止：老版本会把 `Download/` 这类目录当成移动目标，而 MediaStore 对图片和视频
+     *    只接受各自允许的目录（见 [isMediaDestinationLegal]），
      *    重试多少次都是同一句报错。
      */
     private fun restorePendingMoves() {
@@ -853,7 +853,7 @@ class ReviewViewModel(
             snapshot.forEach { move ->
                 val image = byId[move.imageId] ?: return@forEach
                 if (isAtTarget(image, move)) return@forEach
-                if (!isImageDestinationLegal(move.targetPath)) {
+                if (!isMediaDestinationLegal(move.targetPath, image.isVideo)) {
                     unreachable++
                     return@forEach
                 }
@@ -872,16 +872,20 @@ class ReviewViewModel(
             val knownTargets = _state.value.moveTargets
                 .mapTo(HashSet()) { it.relativePath.trim('/') }
             val restoredTargets = snapshot
-                .filter {
-                    isImageDestinationLegal(it.targetPath) &&
-                        !isSystemMoveTargetPath(it.targetPath) &&
-                        !isSystemMoveTargetPath(it.albumPath)
+                .filter { move ->
+                    val image = byId[move.imageId]
+                    image != null && isMediaDestinationLegal(move.targetPath, image.isVideo) &&
+                        !isSystemMoveTargetPath(move.targetPath) &&
+                        !isSystemMoveTargetPath(move.albumPath)
                 }
                 .map { move ->
+                    val albumPath = move.albumPath.takeIf {
+                        isMediaDestinationLegal(it, byId[move.imageId]?.isVideo == true)
+                    } ?: move.targetPath.trim('/')
                     MediaAlbum(
                         bucketId = move.bucketId,
                         name = move.albumName,
-                        relativePath = move.albumPath.ifBlank { move.targetPath.trim('/') },
+                        relativePath = albumPath,
                         count = 0,
                         cover = null,
                     )
@@ -922,7 +926,7 @@ class ReviewViewModel(
                     true
                 }
 
-                !isImageDestinationLegal(move.targetPath) -> {
+                image == null || !isMediaDestinationLegal(move.targetPath, image.isVideo) -> {
                     reviewed.unmark(id)
                     val record = history.find { it.action == ReviewAction.Move && it.image.id == id }
                     if (record != null) {

@@ -5,7 +5,7 @@
   约定：
    · 带参数的一律用位置占位符（%1$s / %1$d），不要用 getString 拼字符串 ——
      拼接出来的句子在语序不同的语言里会读不通。
-   · 数量词走 <plurals name="photo_count">。中文只有 other 一种形式，
+   · 数量词走 <plurals name="photo_count">。照片和视频的混合数量统一用「项」，中文只有 other 一种形式，
      但英语、俄语、阿拉伯语有 2~6 种，先立好结构，将来加 values-en/ 不用改代码。
    · 数据层（core/）不放任何文案：展示语言不该焊死在模型里。
 -->
@@ -20,30 +20,30 @@
 
     <!-- ============================================================ 通用 -->
     <plurals name="photo_count">
-        <item quantity="other">%1$d 张</item>
+        <item quantity="other">%1$d 项</item>
     </plurals>
     <!--
-      「还剩多少张没整理」—— 主口径。
+      「还剩多少项没整理」—— 主口径。
 
       参考实现（Slidebox）全程只报这一个数：用户要回答的问题是「我还剩多少活要干」，
       而不是「这个范围里一共躺着多少张」。总数降为副信息（见 photo_remaining_compact）。
     -->
     <plurals name="photo_remaining">
-        <item quantity="other">剩 %1$d 张</item>
+        <item quantity="other">剩 %1$d 项</item>
     </plurals>
     <plurals name="photo_remaining_compact">
         <item quantity="other">剩 %1$d / %2$d</item>
     </plurals>
     <plurals name="photo_remaining_of_total">
-        <item quantity="other">剩 %1$d 张 · 共 %2$d 张</item>
+        <item quantity="other">剩 %1$d 项 · 共 %2$d 项</item>
     </plurals>
     <plurals name="selected_count">
-        <item quantity="other">已选 %1$d 张</item>
+        <item quantity="other">已选 %1$d 项</item>
     </plurals>
 
     <string name="month_title">%1$d 年 %2$d 月</string>
     <string name="month_short">%1$d 月</string>
-    <string name="month_count">待整理照片分布在 %1$d 个月份</string>
+    <string name="month_count">待整理照片和视频分布在 %1$d 个月份</string>
 
     <string name="action_all">全部</string>
     <string name="action_back">返回</string>
@@ -60,7 +60,7 @@
     <string name="scope_recent">最近</string>
     <string name="scope_recent_all">最近（全部）</string>
     <string name="scope_pick_title">选择整理范围</string>
-    <string name="scope_pending_count">待整理 %1$s 张</string>
+    <string name="scope_pending_count">待整理 %1$s 项</string>
     <string name="scope_screenshots">截图</string>
     <string name="scope_screenshots_all">截图（全部）</string>
 
@@ -75,25 +75,25 @@
     <string name="scope_section_months">按月份</string>
 
     <!-- ============================================================ 首页 -->
-    <string name="home_subtitle_empty">还没有可整理的照片</string>
-    <!-- 整理首页只展示待整理照片及其占用空间 -->
+    <string name="home_subtitle_empty">还没有可整理的照片或视频</string>
+    <!-- 整理首页只展示待整理媒体及其占用空间 -->
     <string name="home_subtitle_pending">%1$s待整理 · %2$s</string>
-    <string name="home_subtitle_all_done">没有待整理的照片</string>
+    <string name="home_subtitle_all_done">没有待整理的照片或视频</string>
     <string name="home_hero_pending">%1$s待整理</string>
     <string name="home_all_done_title">这一轮整理完成</string>
-    <string name="home_all_done_desc">当前没有待整理照片，全部照片仍可在相册中查看。</string>
+    <string name="home_all_done_desc">当前没有待整理媒体，照片和视频仍可在相册中查看。</string>
     <string name="home_view_albums">查看相册</string>
     <string name="badge_partial">部分授权</string>
     <string name="home_section_time">按时间</string>
     <string name="home_section_folders">文件夹</string>
-    <string name="home_section_folders_sub">有待整理照片的目录</string>
-    <string name="home_empty_title">这里还没有照片</string>
-    <string name="home_empty_desc_read">设备相册是空的，或者目前只授权了部分照片。</string>
-    <string name="home_empty_desc_denied">先授予照片访问权限，才能开始整理。</string>
+    <string name="home_section_folders_sub">有待整理媒体的目录</string>
+    <string name="home_empty_title">这里还没有照片或视频</string>
+    <string name="home_empty_desc_read">设备媒体库是空的，或者目前只授权了部分媒体。</string>
+    <string name="home_empty_desc_denied">先授予照片和视频访问权限，才能开始整理。</string>
     <string name="home_hero_badge">继续整理</string>
     <string name="home_hero_action">开始整理</string>
-    <string name="home_hero_subtitle">从最新的一张开始，滑一滑就整理完了</string>
-    <string name="cd_recent_photo">最近的照片</string>
+    <string name="home_hero_subtitle">从最新的一项开始，滑一滑就整理完了</string>
+    <string name="cd_recent_photo">最近的照片或视频</string>
     <!-- 快捷分类入口（截图等）：只在真的扫到内容时才出现，不给空入口 -->
     <string name="home_section_quick">快捷整理</string>
     <string name="home_section_quick_sub">按类型单独过一遍</string>
@@ -120,46 +120,46 @@
     <string name="duplicate_scan_failed">比对重复照片失败，可以点重新比对再试一次</string>
 
     <!-- ============================================================ 相册页 -->
-    <string name="albums_subtitle_empty">设备上还没有存图目录</string>
-    <string name="albums_subtitle">扫到的存图位置都在这里，点进去就能整理</string>
+    <string name="albums_subtitle_empty">设备上还没有照片或视频目录</string>
+    <string name="albums_subtitle">照片和视频所在的位置都在这里，点进去就能整理</string>
     <string name="albums_empty_title">没有相册</string>
-    <string name="albums_empty_desc">设备上没有找到任何照片目录。</string>
-    <string name="partial_title">当前只看到部分照片</string>
-    <string name="partial_desc">系统只允许应用访问你勾选的那些照片。</string>
+    <string name="albums_empty_desc">设备上没有找到任何照片或视频目录。</string>
+    <string name="partial_title">当前只看到部分媒体</string>
+    <string name="partial_desc">系统只允许应用访问你勾选的照片和视频。</string>
     <string name="action_select_more">选择更多</string>
 
     <!-- ============================================================ 回收站 -->
     <string name="trash_title">回收站</string>
     <string name="cd_back_settings">返回设置</string>
-    <string name="trash_subtitle_empty">交给系统的照片 30 天内可以还原，之后由系统自动清空</string>
+    <string name="trash_subtitle_empty">交给系统的照片和视频 30 天内可以还原，之后由系统自动清空</string>
     <string name="trash_subtitle">%1$s · 30 天内可以还原，之后由系统自动清空</string>
     <string name="trash_empty_title">回收站是空的</string>
-    <string name="trash_empty_desc">在整理页点「提交」之后，被清除的照片会出现在这里。</string>
-    <string name="trash_select_hint">先勾选要处理的照片</string>
+    <string name="trash_empty_desc">在整理页点「提交」之后，被清除的照片和视频会出现在这里。</string>
+    <string name="trash_select_hint">先勾选要处理的项目</string>
     <string name="trash_select_all">全选</string>
     <string name="trash_deselect_all">取消全选</string>
     <string name="action_restore">还原到相册</string>
     <string name="action_delete_forever">彻底删除</string>
-    <string name="trash_delete_title">确认彻底删除这 %1$d 张？</string>
+    <string name="trash_delete_title">确认彻底删除这 %1$d 项？</string>
     <string name="trash_delete_body">会释放约 %1$s。删除后无法恢复，也不会再被系统回收站兜底。</string>
     <string name="action_confirm_delete">确认删除</string>
     <string name="action_reconsider">我再想想</string>
-    <string name="trash_restored">已还原 %1$d 张</string>
-    <string name="trash_deleted">已删除 %1$d 张</string>
+    <string name="trash_restored">已还原 %1$d 项</string>
+    <string name="trash_deleted">已删除 %1$d 项</string>
     <string name="trash_load_more_retry">加载失败，点此重试</string>
     <!-- 快捷动作：全部还原 / 清空回收站（清空前用同一个确认框，看到准确张数与占用空间） -->
     <string name="trash_restore_all">全部还原</string>
     <string name="trash_empty_all">清空回收站</string>
     <string name="trash_more_actions">更多回收站操作</string>
-    <string name="trash_bulk_preparing">正在读取回收站里的全部照片…</string>
+    <string name="trash_bulk_preparing">正在读取回收站里的全部照片和视频…</string>
 
     <!-- ============================================================ 设置页 -->
-    <string name="settings_section_dest">照片去向</string>
+    <string name="settings_section_dest">媒体去向</string>
     <string name="settings_trash_subtitle_empty">里面是空的</string>
-    <string name="settings_trash_subtitle">%1$d 张 · 30 天内可以还原</string>
+    <string name="settings_trash_subtitle">%1$d 项 · 30 天内可以还原</string>
     <string name="settings_section_appearance">外观</string>
     <string name="settings_theme_title">主题</string>
-    <string name="settings_theme_desc">整理照片时深色更省电、也更能凸显照片本身。</string>
+    <string name="settings_theme_desc">整理照片和视频时，深色更省电也更能突出画面。</string>
     <string name="settings_theme_system">跟随系统</string>
     <string name="settings_theme_light">浅色</string>
     <string name="settings_theme_dark">深色</string>
@@ -179,11 +179,11 @@
     <string name="settings_haptics_title">震动反馈</string>
     <string name="settings_haptics_desc">滑到阈值时轻震一下，不用盯着屏幕也知道松手会生效</string>
     <string name="settings_preview_title">显示下一张预览</string>
-    <string name="settings_preview_desc">当前照片后面透出下一张，更有「一叠纸」的实感</string>
+    <string name="settings_preview_desc">当前项目后面透出下一项，更有「一叠卡片」的实感</string>
     <string name="settings_section_data">数据</string>
     <string name="settings_privacy_title">隐私说明</string>
-    <string name="settings_privacy_no_network">清单里没有网络权限，照片无法上传</string>
-    <string name="settings_privacy_only_images">只申请 READ_MEDIA_IMAGES，不碰其他数据</string>
+    <string name="settings_privacy_no_network">清单里没有网络权限，照片和视频无法上传</string>
+    <string name="settings_privacy_only_images">只读取照片和视频，不碰位置、通讯录等数据</string>
     <string name="settings_privacy_confirm">删除与移动都由系统弹窗确认后才执行</string>
     <string name="settings_version">版本 %1$s · targetSdk 36（Android 16）</string>
 
@@ -193,18 +193,18 @@
     <string name="cd_submit">提交这次整理</string>
     <string name="cd_more">更多</string>
     <string name="menu_help">使用方法</string>
-    <string name="menu_defer">跳过这张，稍后再看</string>
+    <string name="menu_defer">跳过这项，稍后再看</string>
     <string name="menu_restart">从头再整理一遍</string>
     <string name="review_hint">左滑保留 · 上滑回收站 · 下滑撤销</string>
     <string name="review_queued">已排队 %1$s · 点右上角提交</string>
     <string name="review_idle">改动先排队，全部决定完再一次性提交</string>
-    <string name="summary_move">移动 %1$d 张</string>
-    <string name="summary_trash">回收 %1$d 张</string>
+    <string name="summary_move">移动 %1$d 项</string>
+    <string name="summary_trash">回收 %1$d 项</string>
     <string name="summary_join">%1$s + %2$s</string>
 
     <string name="commit_dialog_title">提交这次整理？</string>
-    <string name="commit_dialog_move">移动 %1$d 张到对应相册</string>
-    <string name="commit_dialog_trash">把 %1$d 张放进系统回收站</string>
+    <string name="commit_dialog_move">移动 %1$d 项到对应相册</string>
+    <string name="commit_dialog_trash">把 %1$d 项放进系统回收站</string>
     <string name="commit_dialog_note">提交后系统会弹一次授权，同意即生效。「保留」不产生任何改动。</string>
     <string name="action_confirm_commit">确认提交</string>
 
@@ -217,29 +217,29 @@
     <string name="exit_review_discard">丢弃更改 (%1$d)</string>
     <!-- P11 口径分离：discardableCount==0 && pendingTotal>0 时暂存项仍有出路（整理中回收站），
          此时丢弃按钮禁用并给出该提示。数字口径见 ReviewUiState.discardableCount。 -->
-    <string name="exit_review_no_discardable">本次没有待丢弃的改动，其他范围暂存的照片仍在整理中回收站里。</string>
+    <string name="exit_review_no_discardable">本次没有待丢弃的改动，其他范围暂存的媒体仍在整理中回收站里。</string>
 
     <!-- ============================================================ 整理中新建相册 -->
     <string name="album_new_tile">新相册</string>
-    <string name="album_new_title">转移到新相册…</string>
+    <string name="album_new_title">移到新相册…</string>
     <string name="album_new_hint">相册名称</string>
-    <string name="album_new_note">将在 Pictures/ 下创建这个相册，并把当前这张放进去。空的相册要等第一张照片落进去才会出现在系统相册里。</string>
+    <string name="album_new_note">将在 Pictures/ 或 Movies/ 下创建这个相册，并把当前项目放进去。空相册要等媒体放入后才会出现在系统相册里。</string>
     <string name="album_new_create">创建</string>
     <string name="album_new_error_empty">先给相册起个名字</string>
     <string name="album_new_error_duplicate">已经有同名相册了</string>
     <string name="album_new_error_invalid">名字里不能带 / \\ 或首尾空格</string>
-    <string name="album_new_created">已新建「%1$s」并放入 1 张</string>
+    <string name="album_new_created">已新建「%1$s」并放入 1 项</string>
 
     <!-- ============================================================ 整理中回收站（会话暂存） -->
-    <string name="menu_staging">待清除的照片 (%1$d)</string>
+    <string name="menu_staging">待清除的媒体 (%1$d)</string>
     <string name="staging_sheet_title">已排队待清除</string>
     <string name="staging_sheet_desc">这些还只在应用内存里，点「提交」之前都能反悔。</string>
-    <string name="staging_sheet_empty">还没有排队的照片</string>
+    <string name="staging_sheet_empty">还没有排队的项目</string>
     <string name="staging_restore_all">全部还原到队列</string>
-    <string name="staging_restore_one">还原这张</string>
+    <string name="staging_restore_one">还原这项</string>
 
     <string name="finished_title">这一轮整理完了</string>
-    <string name="finished_desc">照片库还没有发生任何变化 —— 确认之前都有退路。</string>
+    <string name="finished_desc">媒体库还没有发生任何变化 —— 确认之前都有退路。</string>
     <string name="stat_keep">保留</string>
     <string name="stat_move">移动</string>
     <string name="stat_trash">回收站</string>
@@ -248,7 +248,7 @@
     <string name="action_restart">再来一轮</string>
 
     <!-- 读取失败必须与「整理完了」分开说：把失败渲染成完成，等于告诉用户照片都处理过了 -->
-    <string name="review_load_error_title">这批照片没能读出来</string>
+    <string name="review_load_error_title">这批媒体没能读出来</string>
     <string name="review_load_error_desc">可以重试。如果一直失败，回首页点一次重新扫描再进来。</string>
     <string name="action_retry">重试</string>
 
@@ -258,63 +258,63 @@
 
     <!-- ViewModel 产出的提示语（走 Snackbar），因此也必须可本地化 -->
     <string name="commit_nothing_pending">没有待提交的改动</string>
-    <string name="commit_moved">已移动 %1$d 张</string>
-    <string name="commit_submitting_moves">正在提交 · 移动 %1$d 张</string>
-    <string name="commit_submitting_trash">正在提交 · 回收 %1$d 张</string>
-    <string name="commit_submitting_both">正在提交 · 移动 %1$d 张，回收 %2$d 张</string>
-    <string name="commit_done_moves">已完成 · 移动 %1$d 张</string>
-    <string name="commit_done_trash">已完成 · 回收 %1$d 张</string>
-    <string name="commit_done_both">已完成 · 移动 %1$d 张，回收 %2$d 张</string>
+    <string name="commit_moved">已移动 %1$d 项</string>
+    <string name="commit_submitting_moves">正在提交 · 移动 %1$d 项</string>
+    <string name="commit_submitting_trash">正在提交 · 回收 %1$d 项</string>
+    <string name="commit_submitting_both">正在提交 · 移动 %1$d 项，回收 %2$d 项</string>
+    <string name="commit_done_moves">已完成 · 移动 %1$d 项</string>
+    <string name="commit_done_trash">已完成 · 回收 %1$d 项</string>
+    <string name="commit_done_both">已完成 · 移动 %1$d 项，回收 %2$d 项</string>
     <!-- 队列里那些「系统根本不允许落进去」的移动（老版本会把 Download/ 当目标）：清出来并说清楚 -->
-    <string name="commit_move_target_skipped">已跳过 %1$d 张：系统不允许把图片移到该位置</string>
-    <string name="commit_move_partial_failed">已移动 %1$d 张，%2$d 张移动失败已跳过</string>
-    <string name="commit_move_all_failed">%1$d 张移动失败已跳过</string>
+    <string name="commit_move_target_skipped">已跳过 %1$d 项：系统不允许把媒体移到该位置</string>
+    <string name="commit_move_partial_failed">已移动 %1$d 项，%2$d 项移动失败已跳过</string>
+    <string name="commit_move_all_failed">%1$d 项移动失败已跳过</string>
     <string name="image_load_failed">无法加载图片</string>
 
     <!-- 扫描失败也必须说出来：静默失败会让用户以为「照片没了」或者「应用坏了」 -->
-    <string name="library_load_failed">读取照片失败，请点重新扫描再试一次</string>
+    <string name="library_load_failed">读取照片和视频失败，请点重新扫描再试一次</string>
 
     <!-- 媒体写操作的失败原因（由 MediaOpCoordinator / MediaStoreRepository 产出） -->
     <string name="media_op_budget_exhausted">系统未放行这次修改，已跳过</string>
-    <string name="media_op_consent_denied">未获得授权，照片没有被改动</string>
+    <string name="media_op_consent_denied">未获得授权，照片和视频没有被改动</string>
     <string name="media_op_trash_request_failed">无法创建回收站请求</string>
     <string name="media_op_delete_request_failed">无法创建删除请求</string>
     <string name="media_op_consent_request_failed">无法创建授权请求</string>
     <string name="media_op_failed">操作失败</string>
 
     <!-- ============================================================ 手势卡片 -->
-    <string name="cd_current_photo">待整理的照片</string>
+    <string name="cd_current_photo">待整理的照片或视频</string>
     <!-- 移动目标标签重名时（bucket 显示名撞车，例如 ROM 把 DCIM/Camera 叫「相机」，
          设备上又真有个 DCIM/相机）：把这行读出来，否则两张卡在无障碍下也无法区分 -->
     <string name="cd_move_target_folder">%1$s，文件夹 %2$s</string>
-    <string name="stamp_keep">保留 · 下一张</string>
+    <string name="stamp_keep">保留 · 下一项</string>
     <string name="stamp_trash">移到回收站</string>
     <string name="stamp_undo">撤销上一个动作</string>
     <string name="stamp_armed">松手生效</string>
 
     <!-- ============================================================ 帮助 -->
     <string name="help_title">怎么用</string>
-    <string name="help_subtitle">整页只有一张照片，按方向做决定就行。</string>
+    <string name="help_subtitle">整页只有一项媒体，按方向做决定就行。</string>
     <string name="help_keep_title">向左滑</string>
-    <string name="help_keep_body">保留，看下一张</string>
+    <string name="help_keep_body">保留，看下一项</string>
     <string name="help_trash_title">向上滑</string>
     <string name="help_trash_body">先排进回收站，等最后提交时统一确认</string>
     <string name="help_undo_title">向下滑</string>
     <string name="help_undo_body">撤销上一个动作，后悔药永远在手边</string>
     <string name="help_move_title">点下方箭头</string>
-    <string name="help_move_body">把这张排进对应相册，同样等提交时一起生效</string>
-    <string name="help_footer">在你点「确认删除」之前，照片库不会有任何变化。</string>
+    <string name="help_move_body">把当前项目排进对应相册，同样等提交时一起生效</string>
+    <string name="help_footer">在你点「确认删除」之前，媒体库不会有任何变化。</string>
 
     <!-- ============================================================ 权限引导 -->
-    <string name="perm_title">先让 PhotoTidy 看到你的照片</string>
-    <string name="perm_subtitle">整理照片必须读取相册。下面是这个应用承诺的三件事。</string>
+    <string name="perm_title">先让 PhotoTidy 看到你的照片和视频</string>
+    <string name="perm_subtitle">整理照片和视频需要读取媒体库。下面是这个应用承诺的三件事。</string>
     <string name="perm_offline_title">不联网，传不出去</string>
-    <string name="perm_offline_body">应用清单里没有网络权限，照片在物理上无法离开这台设备。</string>
-    <string name="perm_images_title">只要照片，不要别的</string>
-    <string name="perm_images_body">只申请 READ_MEDIA_IMAGES，不碰视频、位置、通讯录、通话记录。</string>
+    <string name="perm_offline_body">应用清单里没有网络权限，照片和视频在物理上无法离开这台设备。</string>
+    <string name="perm_images_title">只读取照片和视频</string>
+    <string name="perm_images_body">不读取位置、通讯录、通话记录等其他数据。</string>
     <string name="perm_confirm_title">动手之前一定问你</string>
     <string name="perm_confirm_body">删除和移动都会弹出系统确认框，你点了同意才会真的改。</string>
-    <string name="action_grant">授予照片访问权限</string>
+    <string name="action_grant">授予照片和视频访问权限</string>
     <string name="action_open_settings">已经拒绝了？去系统设置里打开</string>
 
 </resources>

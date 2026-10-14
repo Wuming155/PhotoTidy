@@ -3,12 +3,13 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-      照片读取权限：按 API 分级声明。
-      · API 33+  : READ_MEDIA_IMAGES
-      · API 34+  : 追加 READ_MEDIA_VISUAL_USER_SELECTED，支持「仅选择部分照片」的部分授权
+      照片和视频读取权限：按 API 分级声明。
+      · API 33+  : READ_MEDIA_IMAGES + READ_MEDIA_VIDEO
+      · API 34+  : 追加 READ_MEDIA_VISUAL_USER_SELECTED，支持「仅选择部分照片或视频」的部分授权
       · API ≤ 32 : READ_EXTERNAL_STORAGE（maxSdkVersion 限制，不污染新系统）
     -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"

@@ -34,6 +34,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -167,7 +168,9 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
         Graph.mediaOps.consent.collect { request -> consentLauncher.launch(request) }
     }
     LaunchedEffect(Unit) {
-        Graph.mediaOps.messages.collect { message -> snackbarHostState.showSnackbar(message) }
+        Graph.mediaOps.messages.collect { message ->
+            snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Long)
+        }
     }
 
     // ---------------------------------------------------------------- 导航

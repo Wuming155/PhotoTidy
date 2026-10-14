@@ -111,7 +111,8 @@ class MediaStoreRepository(
 ) : MediaRepository {
 
     private val resolver: ContentResolver = context.contentResolver
-    private val collection: Uri = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+    /** 用 Files 集合统一分页读取照片和视频；ID 在此集合内全局唯一。 */
+    private val collection: Uri = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
 
     fun uriFor(id: Long): Uri = ContentUris.withAppendedId(collection, id)
 
@@ -274,7 +275,8 @@ class MediaStoreRepository(
             var currentGroup: ArrayList<Long>? = null
 
             openCursor(
-                selection = VISIBLE,
+                selection = "$VISIBLE AND ${MediaStore.Files.FileColumns.MEDIA_TYPE} = " +
+                    MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE,
                 onlyTrashed = false,
                 projection = ID_SIZE,
                 sortOrder = SIZE_CANDIDATE_SORT_ORDER,
@@ -361,7 +363,7 @@ class MediaStoreRepository(
         ids.chunked(900).forEach { chunk ->
             val placeholders = chunk.joinToString(",") { "?" }
             openCursor(
-                selection = "${MediaStore.MediaColumns._ID} IN ($placeholders)",
+                selection = "$VISIBLE AND ${MediaStore.MediaColumns._ID} IN ($placeholders)",
                 selectionArgs = chunk.map { it.toString() }.toTypedArray(),
                 onlyTrashed = null,
             )?.use { c ->
@@ -375,7 +377,7 @@ class MediaStoreRepository(
     /** 系统回收站里有多少张。只读 `_ID` 一列，不物化任何 MediaImage。 */
     suspend fun countTrashed(): Int = withContext(Dispatchers.IO) {
         var count = 0
-        openCursor(selection = null, onlyTrashed = true, onlyIdColumn = true)?.use { c ->
+        openCursor(selection = VISIBLE, onlyTrashed = true, onlyIdColumn = true)?.use { c ->
             count = c.count
         }
         count
@@ -385,7 +387,7 @@ class MediaStoreRepository(
     suspend fun pageTrashed(offset: Int, limit: Int): List<MediaImage> = withContext(Dispatchers.IO) {
         if (limit <= 0) return@withContext emptyList()
         val out = ArrayList<MediaImage>(limit)
-        openCursor(selection = null, onlyTrashed = true, limit = limit, offset = offset)?.use { c ->
+        openCursor(selection = VISIBLE, onlyTrashed = true, limit = limit, offset = offset)?.use { c ->
             val cols = Cols(c)
             while (c.moveToNext()) out += c.toImage(cols)
         }
@@ -571,7 +573,7 @@ class MediaStoreRepository(
         MediaScope.Recent -> VISIBLE to null
 
         is MediaScope.Album ->
-            "$VISIBLE AND ${MediaStore.Images.Media.BUCKET_ID} = ?" to arrayOf(bucketId.toString())
+            "$VISIBLE AND ${MediaStore.MediaColumns.BUCKET_ID} = ?" to arrayOf(bucketId.toString())
 
         // 截图：按 RELATIVE_PATH 前缀匹配，不按桶显示名（见 MediaScope.Screenshots 的注释）。
         // 两个「兜底」列出的 ROM 差异：
@@ -657,8 +659,9 @@ class MediaStoreRepository(
         val path = c.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
         val favorite = c.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_FAVORITE)
         val trashed = c.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_TRASHED)
-        val bucket = c.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_ID)
-        val bucketName = c.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+        val bucket = c.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_ID)
+        val bucketName = c.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+        val mediaType = c.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MEDIA_TYPE)
     }
 
     /** 拍摄时间（毫秒）：系统可能没写 DATE_TAKEN，退化用入库时间。 */
@@ -687,6 +690,7 @@ class MediaStoreRepository(
             height = getInt(c.height),
             isFavorite = getInt(c.favorite) == 1,
             isTrashed = getInt(c.trashed) == 1,
+            isVideo = getInt(c.mediaType) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO,
         )
     }
 
@@ -717,7 +721,10 @@ class MediaStoreRepository(
 
         const val VISIBLE =
             "COALESCE(${MediaStore.MediaColumns.IS_PENDING}, 0) = 0 AND " +
-                "${MediaStore.MediaColumns.SIZE} > 0"
+                "${MediaStore.MediaColumns.SIZE} > 0 AND " +
+                "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN (" +
+                "${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE}, " +
+                "${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO})"
 
         /** 展示层口径的真·拍摄时间；见 `MediaScope.filter()` 的注释。 */
         const val EFFECTIVE_DATE =
@@ -762,8 +769,9 @@ class MediaStoreRepository(
             MediaStore.MediaColumns.RELATIVE_PATH,
             MediaStore.MediaColumns.IS_FAVORITE,
             MediaStore.MediaColumns.IS_TRASHED,
-            MediaStore.Images.Media.BUCKET_ID,
-            MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
+            MediaStore.MediaColumns.BUCKET_ID,
+            MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
+            MediaStore.Files.FileColumns.MEDIA_TYPE,
         )
 
         const val SORT_ORDER =
@@ -809,6 +817,7 @@ internal fun monthWindowAt(epochMillis: Long, zone: ZoneId): MonthWindow {
 
 /** 共享存储里图片唯一被允许的两棵顶层子树之一（另一棵是 `DCIM`）。 */
 private const val IMAGE_ROOT = "Pictures"
+private const val VIDEO_ROOT = "Movies"
 
 /** 截图目录的两种前缀（末尾不带 `/`）：AOSP 用前者，少数定制 ROM 用后者。 */
 internal const val SCREENSHOT_PATH_PICTURES = "Pictures/Screenshots"
@@ -860,6 +869,18 @@ fun isImageDestinationLegal(relativePath: String): Boolean {
     return top.equals("DCIM", ignoreCase = true) || top.equals(IMAGE_ROOT, ignoreCase = true)
 }
 
+/** 视频可移动到 DCIM、Movies 或 Pictures 目录。 */
+fun isVideoDestinationLegal(relativePath: String): Boolean {
+    val top = relativePath.trim('/').substringBefore('/')
+    return top.equals("DCIM", ignoreCase = true) ||
+        top.equals(VIDEO_ROOT, ignoreCase = true) ||
+        top.equals(IMAGE_ROOT, ignoreCase = true)
+}
+
+/** 根据媒体类型检查系统接受的相对路径根目录。 */
+fun isMediaDestinationLegal(relativePath: String, isVideo: Boolean): Boolean =
+    if (isVideo) isVideoDestinationLegal(relativePath) else isImageDestinationLegal(relativePath)
+
 private fun normalizeMediaRelativePath(relativePath: String): String =
     relativePath.split('/', '\\')
         .filter(String::isNotBlank)
@@ -880,7 +901,7 @@ fun isOrganizationSourcePath(relativePath: String): Boolean {
     }
 }
 
-private val ORGANIZATION_SOURCE_ROOTS = setOf("dcim", "pictures")
+private val ORGANIZATION_SOURCE_ROOTS = setOf("dcim", "pictures", "movies")
 
 private val ORGANIZATION_SOURCE_SUBTREES = setOf(
     "dcim/camera",
@@ -917,11 +938,12 @@ private val SYSTEM_MOVE_TARGET_PATHS = setOf(
  *
  * 做成**顶层纯函数**是为了让这些规则能在 JVM 单测里直测，不依赖 `Context`。
  */
-fun computeTargetPath(album: MediaAlbum): String {
+fun computeTargetPath(album: MediaAlbum, isVideo: Boolean = false): String {
     val existing = album.relativePath.trim('/')
-    if (isImageDestinationLegal(existing)) return "$existing/"
+    if (isMediaDestinationLegal(existing, isVideo)) return "$existing/"
     val name = album.name.trim().trim('/')
-    return if (name.isBlank()) "$IMAGE_ROOT/" else "$IMAGE_ROOT/$name/"
+    val root = if (isVideo) VIDEO_ROOT else IMAGE_ROOT
+    return if (name.isBlank()) "$root/" else "$root/$name/"
 }
 
 /**
@@ -978,5 +1000,8 @@ fun newAlbumIssue(rawName: String, existingNames: Collection<String>): AlbumName
  * `RELATIVE_PATH` 带出来。所以「创建相册」在这一版里等价于「把这张照片投进这个新目录」——
  * 这也正是参考实现的用户感知（建完即投递，不用再点一次移动条）。
  */
-fun newAlbumPath(name: String): String = "$IMAGE_ROOT/${name.trim().trim('/')}"
+fun newAlbumPath(name: String, isVideo: Boolean = false): String {
+    val root = if (isVideo) VIDEO_ROOT else IMAGE_ROOT
+    return "$root/${name.trim().trim('/')}"
+}
 

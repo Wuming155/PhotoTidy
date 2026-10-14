@@ -73,6 +73,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.phototidy.R
+import com.phototidy.core.media.isMediaDestinationLegal
 import com.phototidy.core.model.MediaAlbum
 import com.phototidy.core.model.MediaScope
 import com.phototidy.core.model.ReviewAction
@@ -431,7 +432,9 @@ fun ReviewScreen(
 
                 // -------------------------------------------------------- 快捷移动
                 AlbumQuickMoveBar(
-                    albums = state.moveTargets,
+                    albums = state.moveTargets.filter { album ->
+                        state.current?.let { isMediaDestinationLegal(album.relativePath, it.isVideo) } == true
+                    },
                     enabled = !state.preparing && !state.submitting && !cardAnimating && state.current != null,
                     onMove = handleQuickMove,
                     onNewAlbum = { newAlbumOpen = true },

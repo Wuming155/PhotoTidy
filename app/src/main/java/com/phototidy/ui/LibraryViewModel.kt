@@ -22,6 +22,7 @@ import com.phototidy.core.media.ReviewedLedger
 import com.phototidy.core.media.SessionStore
 import com.phototidy.core.media.StagingTrash
 import com.phototidy.core.media.isImageDestinationLegal
+import com.phototidy.core.media.isVideoDestinationLegal
 import com.phototidy.core.media.isSystemMoveTargetPath
 import com.phototidy.core.model.MediaAlbum
 import com.phototidy.core.model.MediaImage
@@ -183,7 +184,7 @@ class LibraryViewModel(
         if (!observerRegistered && contentResolver != null) {
             try {
                 contentResolver.registerContentObserver(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL),
                     true,
                     mediaObserver,
                 )
@@ -520,9 +521,12 @@ class LibraryViewModel(
 
     /** 整理页里可选的「移动目标」：真实相册；系统标准目录不作为归档目标。 */
     fun moveTargets(currentScope: MediaScope): List<MediaAlbum> {
-        // 只留图片真正落得进去的 DCIM/ 与 Pictures/ 目录，并排除系统默认相册。
+        // 留下照片或视频可落入的真实目录，并排除系统默认相册；具体按当前媒体类型再筛一次。
         val existing = _state.value.albums
-            .filter { it.canReceive && isImageDestinationLegal(it.relativePath) }
+            .filter {
+                it.canReceive && (isImageDestinationLegal(it.relativePath) ||
+                    isVideoDestinationLegal(it.relativePath))
+            }
             .filterNot { isSystemMoveTargetPath(it.relativePath) }
         val excludeBucket = (currentScope as? MediaScope.Album)?.bucketId
         val fromDevice = existing.filter { it.bucketId != excludeBucket }

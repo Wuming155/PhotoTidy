@@ -1,7 +1,7 @@
 package com.phototidy.core.model
 
 /**
- * 一张照片的元数据快照。
+ * 一项照片或视频的元数据快照。
  *
  * 刻意不持有 Bitmap：列表里可能有几万条，Bitmap 由图片加载库按需异步解码。
  * 这里的字段刚好够「排序 / 分组 / 显示 / 定位」四种用途。
@@ -9,7 +9,7 @@ package com.phototidy.core.model
 data class MediaImage(
     val id: Long,
     /**
-     * 内容 URI 的字符串形式（例如 `content://media/external/images/media/42`）。
+     * 内容 URI 的字符串形式（例如 `content://media/external/file/42`）。
      *
      * 用 `String` 而非 `android.net.Uri` 是有意为之：这样 [MediaImage] 不依赖 Android 框架类型，
      * 整理会话的纯逻辑（撤销栈 / 窗口 / 计数）就能在 JVM 单测里直接构造，无需 Robolectric。
@@ -28,6 +28,8 @@ data class MediaImage(
     val height: Int,
     val isFavorite: Boolean,
     val isTrashed: Boolean,
+    /** 是否为视频；统一的 MediaStore Files ID 用于跨照片和视频稳定定位。 */
+    val isVideo: Boolean = false,
 ) {
     /** Coil 缓存键。URI 已包含 id，天然唯一。 */
     val key: String get() = uri

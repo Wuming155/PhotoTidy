@@ -1,5 +1,8 @@
 package com.phototidy.ui.components
 
+import android.graphics.Bitmap
+import android.util.Size
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,12 +23,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -34,6 +39,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.net.toUri
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
@@ -42,6 +48,8 @@ import coil3.request.crossfade
 import com.phototidy.R
 import com.phototidy.core.model.MediaAlbum
 import com.phototidy.core.model.MediaImage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 统一的图片加载入口。
@@ -71,6 +79,49 @@ fun LibraryImage(
     }
     val context = LocalContext.current
     val uri = image.uri
+    if (image.isVideo) {
+        val thumbnail by produceState<Bitmap?>(initialValue = null, key1 = uri) {
+            value = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.loadThumbnail(uri.toUri(), Size(1280, 1280), null)
+                }.getOrNull()
+            }
+        }
+        if (thumbnail == null) {
+            Box(
+                modifier = modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.PlayArrow,
+                    contentDescription = contentDescription,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(40.dp),
+                )
+            }
+        } else {
+            Box(
+                modifier = modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    bitmap = thumbnail!!.asImageBitmap(),
+                    contentDescription = contentDescription,
+                    contentScale = contentScale,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                Surface(shape = CircleShape, color = Color.Black.copy(alpha = 0.42f)) {
+                    Icon(
+                        imageVector = Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp),
+                    )
+                }
+            }
+        }
+        return
+    }
     val request = remember(context, uri, crossfade) {
         ImageRequest.Builder(context)
             .data(uri.toUri())
