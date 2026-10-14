@@ -263,6 +263,9 @@
     <string name="commit_done_both">已完成 · 移动 %1$d 张，回收 %2$d 张</string>
     <!-- 队列里那些「系统根本不允许落进去」的移动（老版本会把 Download/ 当目标）：清出来并说清楚 -->
     <string name="commit_move_target_skipped">已跳过 %1$d 张：系统不允许把图片移到该位置</string>
+    <string name="commit_move_partial_failed">已移动 %1$d 张，%2$d 张移动失败已跳过</string>
+    <string name="commit_move_all_failed">%1$d 张移动失败已跳过</string>
+    <string name="image_load_failed">无法加载图片</string>
 
     <!-- 扫描失败也必须说出来：静默失败会让用户以为「照片没了」或者「应用坏了」 -->
     <string name="library_load_failed">读取照片失败，请点重新扫描再试一次</string>

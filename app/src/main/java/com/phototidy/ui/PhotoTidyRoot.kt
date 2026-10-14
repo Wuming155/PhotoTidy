@@ -63,6 +63,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.phototidy.Graph
 import com.phototidy.R
 import com.phototidy.core.media.MediaPermissions
+import com.phototidy.core.model.MediaAlbum
 import com.phototidy.core.model.MediaScope
 import com.phototidy.core.settings.SettingsStore
 import com.phototidy.ui.albums.AlbumsScreen
@@ -126,7 +127,9 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
-        libraryVm.onAccessResolved(MediaPermissions.interpret(result))
+        libraryVm.onAccessResolved(
+            MediaPermissions.resolveAccess(MediaPermissions.current(context), result),
+        )
     }
 
     // 首次组合 + 每次回到前台都重新判定一次：用户可能刚刚在系统设置里改了授权范围
@@ -136,8 +139,15 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
     }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                libraryVm.onAccessResolved(MediaPermissions.current(context))
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    libraryVm.onResume()
+                    libraryVm.onAccessResolved(MediaPermissions.current(context))
+                }
+                Lifecycle.Event.ON_PAUSE -> {
+                    libraryVm.onPause()
+                }
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -393,11 +403,12 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                     // 记忆化回调：`reviewVm::keep` 这类绑定方法引用每次重组都会新建实例，
                     // 参数实例不等 ⇒ Compose 无法跳过子组件 —— 而这里每次滑动都会重组，
                     // 于是每滑一张整棵整理子树（含带 LazyRow 的快捷移动条）都要重跑。
-                    val onKeep = remember(reviewVm) { reviewVm::keep }
-                    val onTrash = remember(reviewVm) { reviewVm::trash }
+                    val onKeep: (Long?) -> Unit = remember(reviewVm) { { id -> reviewVm.keep(id) } }
+                    val onTrash: (Long?) -> Unit = remember(reviewVm) { { id -> reviewVm.trash(id) } }
                     val onUndo = remember(reviewVm) { reviewVm::undo }
                     val onCommit = remember(reviewVm) { reviewVm::commit }
-                    val onMove = remember(reviewVm) { reviewVm::moveTo }
+                    val onMove: (MediaAlbum, Long?) -> Unit =
+                        remember(reviewVm) { { album, id -> reviewVm.moveTo(album, id) } }
                     val onRestart = remember(reviewVm) { reviewVm::restart }
                     val onDefer = remember(reviewVm) { reviewVm::deferCurrent }
                     val onRetryLoad = remember(reviewVm) { reviewVm::retryLoad }

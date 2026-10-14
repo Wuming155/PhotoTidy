@@ -78,8 +78,9 @@ class MediaOpCoordinator(private val strings: StringProvider) {
         successMessage: String,
         onSuccess: (suspend () -> Unit)? = null,
         onFailure: (suspend (String) -> Unit)? = null,
+        onBatch: (suspend (MediaOpResult.Batch) -> Unit)? = null,
         op: suspend () -> MediaOpResult,
-    ) = runStaged(successMessage, onSuccess, onFailure, consentBudget = 1) { op() }
+    ) = runStaged(successMessage, onSuccess, onFailure, onBatch, consentBudget = 1) { op() }
 
     /**
      * 同 [run]，但允许一次操作最多向系统要 [consentBudget] 次授权。
@@ -99,6 +100,7 @@ class MediaOpCoordinator(private val strings: StringProvider) {
         successMessage: String,
         onSuccess: (suspend () -> Unit)? = null,
         onFailure: (suspend (String) -> Unit)? = null,
+        onBatch: (suspend (MediaOpResult.Batch) -> Unit)? = null,
         consentBudget: Int,
         op: suspend (attempt: Int) -> MediaOpResult,
     ) {
@@ -109,6 +111,19 @@ class MediaOpCoordinator(private val strings: StringProvider) {
                     is MediaOpResult.Success -> {
                         onSuccess?.invoke()
                         emit(successMessage)
+                        return
+                    }
+
+                    is MediaOpResult.Batch -> {
+                        if (onBatch != null) {
+                            onBatch.invoke(result)
+                        } else if (result.failedItems.isEmpty()) {
+                            onSuccess?.invoke()
+                            emit(successMessage)
+                        } else {
+                            val firstError = result.failedItems.values.first().message
+                            report(onFailure, firstError)
+                        }
                         return
                     }
 

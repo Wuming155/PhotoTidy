@@ -18,7 +18,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,10 +32,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.net.toUri
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.phototidy.R
 import com.phototidy.core.model.MediaAlbum
 import com.phototidy.core.model.MediaImage
 
@@ -70,12 +77,45 @@ fun LibraryImage(
             .crossfade(crossfade)
             .build()
     }
-    AsyncImage(
-        model = request,
-        contentDescription = contentDescription,
-        contentScale = contentScale,
-        modifier = modifier,
-    )
+    var isError by remember(request) { mutableStateOf(false) }
+
+    if (isError) {
+        Box(
+            modifier = modifier
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                .padding(8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ErrorOutline,
+                    contentDescription = stringResource(R.string.image_load_failed),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.size(32.dp),
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = image.displayName.ifBlank { stringResource(R.string.image_load_failed) },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    } else {
+        AsyncImage(
+            model = request,
+            contentDescription = contentDescription,
+            contentScale = contentScale,
+            modifier = modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            onError = { isError = true },
+        )
+    }
 }
 
 /** 小节标题：左侧粗体标题 + 可选灰色副标题。 */

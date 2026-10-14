@@ -241,10 +241,15 @@ class ReviewViewModel(
      * 「保留」是唯一不改变照片库的动作，所以它必须留下账 —— 否则用户滑过的照片
      * 下次会原封不动地重新排队，首页的数字也永远停在「一共有多少张」上。
      */
-    fun keep() {
+    fun keep(imageId: Long? = null) {
         // P10 兜底网：可见入口（动作条/手势）均已在 submitting 期间禁用，此处静默返回仅防竞态；
         // 所有读写都在主线程，无需加锁。本仓库一贯反对静默 no-op，此处是唯一例外且已注释。
         if (_state.value.submitting) return
+        val current = currentItem() ?: return
+        if (imageId != null && current.id != imageId) {
+            Log.w(TAG, "keep ignored: expected imageId $imageId but current is ${current.id}")
+            return
+        }
         val image = advance() ?: return
         history.addLast(ReviewRecord(image, ReviewAction.Keep))
         reviewed.mark(image.id)
@@ -257,9 +262,14 @@ class ReviewViewModel(
      * ✕ 清除：只进内存暂存区。
      * 这里**没有**任何文件操作，所以即使连续滑 500 张也不会有一次媒体写入。
      */
-    fun trash() {
+    fun trash(imageId: Long? = null) {
         // P10 兜底网：可见入口均已门控，此处仅防提交期间的竞态写入（主线程，无锁）。
         if (_state.value.submitting) return
+        val current = currentItem() ?: return
+        if (imageId != null && current.id != imageId) {
+            Log.w(TAG, "trash ignored: expected imageId $imageId but current is ${current.id}")
+            return
+        }
         val image = advance() ?: return
         staging.stage(image)
         sessionStagedIds.add(image.id)
@@ -276,13 +286,24 @@ class ReviewViewModel(
      * 一改一存的做法会让用户在整理过程中反复遇到系统授权框；
      * 排到提交时一次性批量处理，用户全程只需要点一次「允许」。
      */
-    fun moveTo(album: MediaAlbum) {
+    fun moveTo(album: MediaAlbum, imageId: Long? = null) {
         // P10 兜底网：可见入口均已门控，此处仅防提交期间的竞态写入（主线程，无锁）。
         if (_state.value.submitting) return
+        val current = currentItem() ?: return
+        if (imageId != null && current.id != imageId) {
+            Log.w(TAG, "moveTo ignored: expected imageId $imageId but current is ${current.id}")
+            return
+        }
+        val targetPath = computeTargetPath(album)
+        // 目标路径与照片当前所在目录一致：直接视同为已归位（Keep），不产生冗余 PendingMove
+        if (current.relativePath.trim('/') == targetPath.trim('/')) {
+            keep(current.id)
+            return
+        }
         val image = advance() ?: return
         pendingMoves[image.id] = PendingMove(
             imageId = image.id,
-            targetPath = computeTargetPath(album),
+            targetPath = targetPath,
             albumName = album.name,
             bucketId = album.bucketId,
             albumPath = album.relativePath,
@@ -293,6 +314,8 @@ class ReviewViewModel(
         persist()
         syncState()
     }
+
+    private fun currentItem(): MediaImage? = queue.peek(0)
 
     /**
      * ↩ 撤销上一个动作。
@@ -525,8 +548,8 @@ class ReviewViewModel(
         _state.update {
             it.copy(submitting = true, submittingLabel = pendingLabel(moves.size, trashes.size))
         }
+        var actuallyMovedIds = emptySet<Long>()
         viewModelScope.launch {
-
             try {
                 // 1) 移动属于「改数据」：要一次写授权，授权后由应用自己改 RELATIVE_PATH
                 if (moves.isNotEmpty()) {
@@ -536,10 +559,66 @@ class ReviewViewModel(
                         } else {
                             strings.get(R.string.commit_moved, moves.size)
                         },
-                        onSuccess = { moves.forEach { move -> pendingMoves.remove(move.imageId) } },
+                        onSuccess = {
+                            actuallyMovedIds = moves.map { it.imageId }.toSet()
+                            moves.forEach { move -> pendingMoves.remove(move.imageId) }
+                        },
                         // 失败之后必须对账：批量直写是逐条进行的，失败之前那几张可能已经落库，
                         // 而队列里还可能留着永远不可能完成的项 —— 见 [dropUnreachableMoves]。
                         onFailure = { _ -> dropUnreachableMoves() },
+                        onBatch = { batch ->
+                            actuallyMovedIds = batch.successfulIds
+                            // 认领成功的项：从待提交队列移除
+                            batch.successfulIds.forEach { id -> pendingMoves.remove(id) }
+                            // 失败项执行状态回滚（Rollback）：
+                            // 1. 从 pendingMoves 移除，解除提交死锁；
+                            // 2. 从 ReviewedLedger 撤销标记，避免被误记为已整理；
+                            // 3. 从 history 查找对应记录并移除，将照片放回 ReviewQueue 头部供用户重新处理；
+                            //    若因进程重启等原因导致 history 为空，则从 repo 重新按 id 查出照片以供放回队列；
+                            // 4. 扣减本次会话计数器 processedCount（保底不低于 0）；
+                            // 5. 保持失败项在队首的相对顺序 (B, C 依次入队 -> [B, C])。
+                            val missingIds = ArrayList<Long>()
+                            val recordImagesById = HashMap<Long, MediaImage>()
+                            batch.failedItems.keys.forEach { id ->
+                                pendingMoves.remove(id)
+                                reviewed.unmark(id)
+                                val record = history.find { it.action == ReviewAction.Move && it.image.id == id }
+                                if (record != null) {
+                                    history.remove(record)
+                                    recordImagesById[id] = record.image
+                                    processedCount = (processedCount - 1).coerceAtLeast(0)
+                                } else {
+                                    missingIds.add(id)
+                                }
+                            }
+                            val fetchedById = if (missingIds.isNotEmpty()) {
+                                runCatchingUnlessCancelled { repo.imagesByIds(missingIds) }.getOrNull().orEmpty().associateBy { it.id }
+                            } else {
+                                emptyMap()
+                            }
+                            val failedImages = ArrayList<MediaImage>()
+                            batch.failedItems.keys.forEach { id ->
+                                val img = recordImagesById[id] ?: fetchedById[id]
+                                if (img != null) {
+                                    failedImages.add(img)
+                                }
+                            }
+                            failedImages.asReversed().forEach { queue.pushFront(it) }
+                            val successCount = batch.successfulIds.size
+                            val failCount = batch.failedItems.size
+                            if (failCount > 0) {
+                                if (successCount > 0) {
+                                    ops.emit(strings.get(R.string.commit_move_partial_failed, successCount, failCount))
+                                } else {
+                                    ops.emit(strings.get(R.string.commit_move_all_failed, failCount))
+                                }
+                            } else {
+                                ops.emit(
+                                    if (trashes.isEmpty()) doneLabel(moves.size, 0)
+                                    else strings.get(R.string.commit_moved, moves.size)
+                                )
+                            }
+                        },
                     ) { repo.moveToAlbums(moves) }
                 }
 
@@ -566,14 +645,12 @@ class ReviewViewModel(
                 // 以及 op() 抛异常（此时 dropUnreachableMoves 不执行，差集为空 ⇒ 不封印）三种结果。
                 // 封印 = 出栈，不引入 ReviewRecord.isCommitted 字段 —— history 的唯一职责就是撤销栈。
                 // 出栈时计数器不动（那些照片仍是「已决定」），维护 processedCount ≥ history.size。
-                val settledMoveIds = moves.map { it.imageId }
-                    .filterNot { it in pendingMoves.keys }.toSet()
                 val settledTrashIds = trashes.map { it.id }
                     .filterNot { id -> staging.items.value.any { it.id == id } }.toSet()
-                val hasAnySettled = settledMoveIds.isNotEmpty() || settledTrashIds.isNotEmpty()
-                if (settledMoveIds.isNotEmpty() || settledTrashIds.isNotEmpty()) {
+                val hasAnySettled = actuallyMovedIds.isNotEmpty() || settledTrashIds.isNotEmpty()
+                if (actuallyMovedIds.isNotEmpty() || settledTrashIds.isNotEmpty()) {
                     history.removeAll { r ->
-                        (r.action == ReviewAction.Move && r.image.id in settledMoveIds) ||
+                        (r.action == ReviewAction.Move && r.image.id in actuallyMovedIds) ||
                             (r.action == ReviewAction.Trash && r.image.id in settledTrashIds)
                     }
                 }
@@ -840,6 +917,13 @@ class ReviewViewModel(
                 }
 
                 !isImageDestinationLegal(move.targetPath) -> {
+                    reviewed.unmark(id)
+                    val record = history.find { it.action == ReviewAction.Move && it.image.id == id }
+                    if (record != null) {
+                        history.remove(record)
+                        queue.pushFront(record.image)
+                        processedCount--
+                    }
                     dropped++
                     unreachable++
                     true

@@ -80,11 +80,12 @@ fun SwipeablePhotoCard(
     showNextPreview: Boolean,
     moveTicket: Long,
     moveTarget: MediaAlbum?,
-    onAction: (ReviewAction, MediaAlbum?) -> Unit,
+    onAction: (Long, ReviewAction, MediaAlbum?) -> Unit,
     onUndo: () -> Unit,
     modifier: Modifier = Modifier,
     /** 手势总开关。提交进行中时传 false —— 那时再改队列会让「已提交」的语义对不上。 */
     interactive: Boolean = true,
+    onBusyChanged: (Boolean) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
@@ -202,6 +203,7 @@ fun SwipeablePhotoCard(
 
     suspend fun flyOutTo(target: Offset) {
         busy = true
+        onBusyChanged(true)
         // 用 try/finally 而不是 runCatching：后者会把 CancellationException 一起吞掉，
         // 于是「这一下飞出被取消」之后代码继续往下跑，**照样**把动作派发出去。
         // finally 既保证 busy 复位，又让取消正常向上传播（协程就此结束，动作不会派发）。
@@ -209,17 +211,20 @@ fun SwipeablePhotoCard(
             settleTo(target, PhotoTidyMotion.dismissal())
         } finally {
             busy = false
+            onBusyChanged(false)
         }
     }
 
     // 外部触发的「移动到相册」：卡片往下滑出屏幕，用空间位移表达「放进文件夹」
-    LaunchedEffect(moveTicket, interactive) {
+    LaunchedEffect(moveTicket) {
         if (moveTicket == 0L || moveTarget == null || !interactive) return@LaunchedEffect
+        val targetImage = image ?: return@LaunchedEffect
+        val targetId = targetImage.id
         // busy 为真说明上一张卡片的飞出动画还在跑：先等它结束再处理本次「移动」，
         // 而不是直接 return —— 直接 return 会静默吞掉 onAction(Move)，并让 moveTarget 卡在非空态。
         if (busy) snapshotFlow { busy }.first { !it }
         flyOutTo(Offset(currentOffset().x, cardSize.height * 1.35f))
-        onAction(ReviewAction.Move, moveTarget)
+        onAction(targetId, ReviewAction.Move, moveTarget)
     }
 
     val gestureEnabled = image != null && !busy && interactive
@@ -239,6 +244,8 @@ fun SwipeablePhotoCard(
                         scope.launch { settleTo(Offset.Zero, PhotoTidyMotion.spatialFast()) }
                     },
                     onDragEnd = {
+                        val targetImage = image ?: return@detectDragGestures
+                        val targetId = targetImage.id
                         scope.launch {
                             when (resolveIntent()) {
                                 SwipeIntent.None -> settleTo(
@@ -248,12 +255,12 @@ fun SwipeablePhotoCard(
 
                                 SwipeIntent.Keep -> {
                                     flyOutTo(Offset(-cardSize.width * 1.35f, currentOffset().y + 40f))
-                                    onAction(ReviewAction.Keep, null)
+                                    onAction(targetId, ReviewAction.Keep, null)
                                 }
 
                                 SwipeIntent.Trash -> {
                                     flyOutTo(Offset(currentOffset().x, -cardSize.height * 1.35f))
-                                    onAction(ReviewAction.Trash, null)
+                                    onAction(targetId, ReviewAction.Trash, null)
                                 }
 
                                 SwipeIntent.Undo -> {

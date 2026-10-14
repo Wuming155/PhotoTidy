@@ -1,6 +1,10 @@
 package com.phototidy.ui
 
+import android.content.ContentResolver
 import android.content.res.Resources
+import android.database.ContentObserver
+import android.net.Uri
+import android.provider.MediaStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
@@ -24,7 +28,9 @@ import com.phototidy.core.model.MediaImage
 import com.phototidy.core.model.MediaScope
 import com.phototidy.core.model.MonthGroup
 import com.phototidy.util.runCatchingUnlessCancelled
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -119,6 +125,7 @@ class LibraryViewModel(
     private val reviewed: ReviewedLedger,
     /** 重复照片比对（纯本地，见 [DuplicateFinder]）。 */
     private val duplicates: DuplicateFinder,
+    private val contentResolver: ContentResolver? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LibraryUiState())
@@ -132,6 +139,79 @@ class LibraryViewModel(
 
     /** 扫描期间又来了刷新请求 —— 跑完补一次，不能直接丢。 */
     private var refreshQueued = false
+
+    private var isResumed = false
+    @Volatile
+    private var mediaDirty = false
+    private var debounceJob: Job? = null
+    private var observerRegistered = false
+
+    private val mediaObserver = object : ContentObserver(null) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
+            onMediaChanged()
+        }
+    }
+
+    /**
+     * 收到 MediaStore 变动通知。
+     * 若应用在前台，进行 500ms 防抖合并后触发刷新；
+     * 若应用在后台，只记录 mediaDirty，待回到前台时在 onResume 对账刷新。
+     */
+    fun onMediaChanged() {
+        if (isResumed) {
+            mediaDirty = true
+            debounceJob?.cancel()
+            debounceJob = viewModelScope.launch {
+                delay(500L)
+                if (isResumed && mediaDirty) {
+                    mediaDirty = false
+                    refresh()
+                }
+            }
+        } else {
+            mediaDirty = true
+        }
+    }
+
+    fun onResume() {
+        isResumed = true
+        if (mediaDirty) {
+            mediaDirty = false
+            debounceJob?.cancel()
+            refresh()
+        }
+    }
+
+    fun onPause() {
+        isResumed = false
+        debounceJob?.cancel()
+    }
+
+    private fun registerObserverIfNeeded() {
+        if (!observerRegistered && contentResolver != null) {
+            try {
+                contentResolver.registerContentObserver(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    true,
+                    mediaObserver,
+                )
+                observerRegistered = true
+            } catch (_: SecurityException) {
+            }
+        }
+    }
+
+    private fun unregisterObserverIfNeeded() {
+        debounceJob?.cancel()
+        mediaDirty = false
+        if (observerRegistered && contentResolver != null) {
+            try {
+                contentResolver.unregisterContentObserver(mediaObserver)
+            } catch (_: Exception) {
+            }
+            observerRegistered = false
+        }
+    }
 
     /**
      * 权限结果回来了。
@@ -151,6 +231,11 @@ class LibraryViewModel(
     fun onAccessResolved(access: MediaAccess) {
         val previous = _state.value.access
         _state.update { it.copy(access = access) }
+        if (access.canRead) {
+            registerObserverIfNeeded()
+        } else {
+            unregisterObserverIfNeeded()
+        }
         if (!access.canRead) return
         if (!loadedOnce || access != previous || access.isPartial) {
             loadedOnce = true
@@ -537,6 +622,8 @@ class LibraryViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        unregisterObserverIfNeeded()
+        debounceJob?.cancel()
         reviewViewModelStore?.clear()
         reviewViewModelStore = null
     }
@@ -552,6 +639,7 @@ class LibraryViewModel(
                     res = Graph.resources,
                     reviewed = Graph.reviewedLedger,
                     duplicates = Graph.duplicateFinder,
+                    contentResolver = Graph.context.contentResolver,
                 )
             }
         }

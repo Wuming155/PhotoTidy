@@ -77,4 +77,18 @@ object MediaPermissions {
         if (result.values.any { it }) return MediaAccess.Full
         return MediaAccess.Denied
     }
+
+    /**
+     * 将权限请求结果解析为媒体访问状态。
+     * 当请求被取消或未发生变动时，必须结合系统当前真实权限状态，
+     * 避免在 Android 14+ 下取消选择器时，原有的 Partial 权限被错误降级为 Denied。
+     */
+    fun resolveAccess(currentFromContext: MediaAccess, result: Map<String, Boolean>): MediaAccess {
+        if (result[READ_MEDIA_IMAGES] == true) return MediaAccess.Full
+        if (result[READ_MEDIA_VISUAL_USER_SELECTED] == true) return MediaAccess.Partial
+        if (result.values.any { it }) return MediaAccess.Full
+        // 如果 result 中没有任何一项为 true（例如用户按返回取消了授权弹窗），
+        // 必须回退检查当前的系统权限状态，不能直接降级为 Denied
+        return currentFromContext
+    }
 }

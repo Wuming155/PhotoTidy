@@ -128,11 +128,11 @@ fun ReviewScreen(
     hapticsEnabled: Boolean,
     showNextPreview: Boolean,
     onClose: () -> Unit,
-    onKeep: () -> Unit,
-    onTrash: () -> Unit,
+    onKeep: (Long?) -> Unit,
+    onTrash: (Long?) -> Unit,
     onUndo: () -> Unit,
     onCommit: () -> Unit,
-    onMove: (MediaAlbum) -> Unit,
+    onMove: (MediaAlbum, Long?) -> Unit,
     onOpenHelp: () -> Unit,
     onPickScope: (MediaScope) -> Unit,
     onRestart: () -> Unit,
@@ -152,6 +152,9 @@ fun ReviewScreen(
     var newAlbumOpen by remember { mutableStateOf(false) }
     var stagingOpen by remember { mutableStateOf(false) }
 
+    // 动画互斥锁：卡片飞出动画期间禁用外部动作条与快捷移动条，阻断竞争消费
+    var cardAnimating by remember { mutableStateOf(false) }
+
     // 「移动到相册」需要驱动卡片做一个下滑飞出动画，用 ticket 触发避免重复响应
     var moveTicket by remember { mutableLongStateOf(0L) }
     var moveTarget by remember { mutableStateOf<MediaAlbum?>(null) }
@@ -160,12 +163,12 @@ fun ReviewScreen(
     // 和 `AlbumQuickMoveBar` 的参数就永远「变了」—— Compose 无法跳过一个参数变化的
     // 子组件，于是每滑一张整棵子树（含含 LazyRow 的快捷移动条）都要重跑。
     // 捕获到的都是 remember 出来的状态持有者，所以可以安全地只记一次。
-    val handleCardAction: (ReviewAction, MediaAlbum?) -> Unit = remember(onKeep, onTrash, onMove) {
-        { action, album ->
+    val handleCardAction: (Long, ReviewAction, MediaAlbum?) -> Unit = remember(onKeep, onTrash, onMove) {
+        { imageId, action, album ->
             when (action) {
-                ReviewAction.Keep -> onKeep()
-                ReviewAction.Trash -> onTrash()
-                ReviewAction.Move -> album?.let(onMove)
+                ReviewAction.Keep -> onKeep(imageId)
+                ReviewAction.Trash -> onTrash(imageId)
+                ReviewAction.Move -> album?.let { onMove(it, imageId) }
             }
             moveTarget = null
         }
@@ -361,9 +364,10 @@ fun ReviewScreen(
                                 hapticsEnabled = hapticsEnabled,
                                 sensitivity = sensitivity,
                                 showNextPreview = showNextPreview,
-                                // 提交正在跑（多半是挂在系统授权框上）：此刻再改队列，
-                                // 新做的决定不在本次请求的范围内，提交完成页的数字也会对不上。
-                                interactive = !state.submitting,
+                                // 提交正在跑（多半是挂在系统授权框上）或卡片飞出动画正在播放：
+                                // 此刻不能交互，避免产生并发消费竞争。
+                                interactive = !state.submitting && !cardAnimating,
+                                onBusyChanged = { cardAnimating = it },
                                 moveTicket = moveTicket,
                                 moveTarget = moveTarget,
                                 onAction = handleCardAction,
@@ -412,16 +416,16 @@ fun ReviewScreen(
             )
 
             // ---------------------------------------------------------- 动作条
-            // busy 同时带上 submitting：提交期间 keep / trash / undo 都必须停手 ——
-            // 改动是在内存里排队的，而提交只对**发起那一刻**的队列负责，
-            // 允许边提交边改会让「已提交」的语义和队列状态自相矛盾。
+            // busy 同时带上 submitting 和 cardAnimating：提交和卡片飞出动画期间 keep / trash / undo 都必须停手 ——
+            // 改动是在内存里排队的，飞出动画期间点击按钮会造成并发竞争，
+            // 允许边动画边点会让后一张照片被错误消费。
             ReviewActionBar(
-                canUndo = state.canUndo,
-                decisionsEnabled = canDecide,
-                busy = state.preparing || state.submitting,
+                canUndo = state.canUndo && !cardAnimating,
+                decisionsEnabled = canDecide && !cardAnimating,
+                busy = state.preparing || state.submitting || cardAnimating,
                 onUndo = onUndo,
-                onKeep = onKeep,
-                onTrash = onTrash,
+                onKeep = { state.current?.let { onKeep(it.id) } },
+                onTrash = { state.current?.let { onTrash(it.id) } },
             )
 
             if (canDecide) {
@@ -430,7 +434,7 @@ fun ReviewScreen(
                 // -------------------------------------------------------- 快捷移动
                 AlbumQuickMoveBar(
                     albums = state.moveTargets,
-                    enabled = !state.preparing && !state.submitting,
+                    enabled = !state.preparing && !state.submitting && !cardAnimating && state.current != null,
                     onMove = handleQuickMove,
                     onNewAlbum = { newAlbumOpen = true },
                 )

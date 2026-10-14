@@ -62,6 +62,13 @@ data class LibraryOverview(
 
 enum class ConsentKind { Write, Trash, Delete }
 
+data class MoveFailure(
+    val uri: Uri? = null,
+    val imageId: Long,
+    val message: String,
+    val cause: Throwable? = null,
+)
+
 sealed interface MediaOpResult {
     /** 已直接完成，无需用户介入。 */
     data object Success : MediaOpResult
@@ -75,6 +82,12 @@ sealed interface MediaOpResult {
     data class NeedsConsent(val intentSender: IntentSender, val kind: ConsentKind) : MediaOpResult
 
     data class Failed(val message: String) : MediaOpResult
+
+    /** 批量操作结果：明确告知哪些成功、哪些失败，避免单个失败项造成全局卡死。 */
+    data class Batch(
+        val successfulIds: Set<Long>,
+        val failedItems: Map<Long, MoveFailure>,
+    ) : MediaOpResult
 }
 
 /**
@@ -356,15 +369,49 @@ class MediaStoreRepository(
     override suspend fun moveToAlbums(items: List<PendingMove>): MediaOpResult =
         withContext(Dispatchers.IO) {
             if (items.isEmpty()) return@withContext MediaOpResult.Success
-            val entries = items.map { move ->
-                uriFor(move.imageId) to ContentValues().apply {
+            val denied = ArrayList<Uri>()
+            val successfulIds = LinkedHashSet<Long>()
+            val failedItems = LinkedHashMap<Long, MoveFailure>()
+
+            items.forEach { move ->
+                val uri = uriFor(move.imageId)
+                val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.RELATIVE_PATH, move.targetPath)
                 }
+                try {
+                    val rows = resolver.update(uri, values, null, null)
+                    if (rows > 0) {
+                        successfulIds.add(move.imageId)
+                    } else {
+                        denied += uri
+                    }
+                } catch (e: SecurityException) {
+                    denied += uri
+                } catch (e: Exception) {
+                    Log.w(TAG, "update failed for image ${move.imageId} to ${move.targetPath}", e)
+                    failedItems[move.imageId] = MoveFailure(
+                        uri = uri,
+                        imageId = move.imageId,
+                        message = e.message ?: strings.get(R.string.media_op_failed),
+                        cause = e,
+                    )
+                }
             }
-            updateAll(entries).toResult(
-                kind = ConsentKind.Write,
-                request = { denied -> MediaStore.createWriteRequest(resolver, denied).intentSender },
-            )
+
+            when {
+                denied.isNotEmpty() -> runCatching {
+                    MediaOpResult.NeedsConsent(
+                        MediaStore.createWriteRequest(resolver, denied).intentSender,
+                        ConsentKind.Write,
+                    )
+                }.getOrElse {
+                    Log.w(TAG, "consent request failed", it)
+                    MediaOpResult.Failed(strings.get(R.string.media_op_consent_request_failed))
+                }
+
+                failedItems.isNotEmpty() -> MediaOpResult.Batch(successfulIds, failedItems)
+                else -> MediaOpResult.Success
+            }
         }
 
 
@@ -619,54 +666,7 @@ class MediaStoreRepository(
         var remaining: Int = 0
     }
 
-    /** 直写结果：哪些 URI 被系统拒绝，以及首个非权限类错误。 */
-    private class UpdateOutcome(val denied: List<Uri>, val firstError: String?)
 
-    private fun UpdateOutcome.toResult(
-        kind: ConsentKind,
-        request: (List<Uri>) -> IntentSender,
-    ): MediaOpResult = when {
-        denied.isEmpty() && firstError == null -> MediaOpResult.Success
-        denied.isEmpty() -> {
-            // ⚠️ 平台原文不能直接当提示语弹给用户。
-            // `Failed(firstError)` 曾把这句话原样送上 Snackbar：
-            // 「Primary directory Download not allowed for content://media/external_primary/
-            //   images/media/228; allowed directories are [DCIM, Pictures]」——
-            // 一句英文系统异常，用户既看不懂也不知道该做什么。
-            // 原文留给日志排查，界面只给本地化的一句。
-            Log.w(TAG, "update rejected: $firstError")
-            MediaOpResult.Failed(strings.get(R.string.media_op_failed))
-        }
-        else -> runCatching { MediaOpResult.NeedsConsent(request(denied), kind) }
-            .getOrElse {
-                Log.w(TAG, "consent request failed", it)
-                MediaOpResult.Failed(strings.get(R.string.media_op_consent_request_failed))
-            }
-    }
-
-    /**
-     * 批量写入，每张照片可以带不同的值（批量移动时各自的 RELATIVE_PATH 不同）。
-     *
-     * ⚠️ 必须看 `update()` 的返回值，不能只看有没有抛异常。
-     * MediaProvider 对「无权修改」的项有时**不抛异常，而是静默返回 0 行** ——
-     * 实机实测 IS_TRASHED 就是这种情况：抛不出 SecurityException，也改不动，
-     * 只看异常会把「什么都没做」误判成成功。
-     */
-    private fun updateAll(entries: List<Pair<Uri, ContentValues>>): UpdateOutcome {
-        val denied = ArrayList<Uri>()
-        var firstError: String? = null
-        entries.forEach { (uri, values) ->
-            try {
-                val rows = resolver.update(uri, values, null, null)
-                if (rows <= 0) denied += uri
-            } catch (e: SecurityException) {
-                denied += uri
-            } catch (e: Exception) {
-                if (firstError == null) firstError = e.message
-            }
-        }
-        return UpdateOutcome(denied, firstError)
-    }
 
     private companion object {
         const val TAG = "MediaStoreRepository"
