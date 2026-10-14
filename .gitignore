@@ -42,6 +42,8 @@ verify-shots/
 local.properties
 *.keystore
 *.jks
+/release-key.jks
+/release-signing.properties
 google-services.json
 
 # ===== 操作系统文件 =====

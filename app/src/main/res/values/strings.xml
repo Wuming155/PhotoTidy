@@ -43,7 +43,7 @@
 
     <string name="month_title">%1$d 年 %2$d 月</string>
     <string name="month_short">%1$d 月</string>
-    <string name="month_count">%1$d 个月份</string>
+    <string name="month_count">待整理照片分布在 %1$d 个月份</string>
 
     <string name="action_all">全部</string>
     <string name="action_back">返回</string>
@@ -60,7 +60,7 @@
     <string name="scope_recent">最近</string>
     <string name="scope_recent_all">最近（全部）</string>
     <string name="scope_pick_title">选择整理范围</string>
-    <string name="scope_remaining_of_total">剩 %1$s / %2$s</string>
+    <string name="scope_pending_count">待整理 %1$s 张</string>
     <string name="scope_screenshots">截图</string>
     <string name="scope_screenshots_all">截图（全部）</string>
 
@@ -76,13 +76,17 @@
 
     <!-- ============================================================ 首页 -->
     <string name="home_subtitle_empty">还没有可整理的照片</string>
-    <!-- 首页副标题：先报「还剩多少要整理」，再报占用空间 -->
-    <string name="home_subtitle_remaining">%1$s待整理 · %2$s</string>
-    <string name="home_subtitle_done">全部整理完了 · %1$s</string>
+    <!-- 整理首页只展示待整理照片及其占用空间 -->
+    <string name="home_subtitle_pending">%1$s待整理 · %2$s</string>
+    <string name="home_subtitle_all_done">没有待整理的照片</string>
+    <string name="home_hero_pending">%1$s待整理</string>
+    <string name="home_all_done_title">这一轮整理完成</string>
+    <string name="home_all_done_desc">当前没有待整理照片，全部照片仍可在相册中查看。</string>
+    <string name="home_view_albums">查看相册</string>
     <string name="badge_partial">部分授权</string>
     <string name="home_section_time">按时间</string>
     <string name="home_section_folders">文件夹</string>
-    <string name="home_section_folders_sub">设备上所有存图目录</string>
+    <string name="home_section_folders_sub">有待整理照片的目录</string>
     <string name="home_empty_title">这里还没有照片</string>
     <string name="home_empty_desc_read">设备相册是空的，或者目前只授权了部分照片。</string>
     <string name="home_empty_desc_denied">先授予照片访问权限，才能开始整理。</string>

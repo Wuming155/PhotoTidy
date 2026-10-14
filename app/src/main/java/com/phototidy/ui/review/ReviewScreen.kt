@@ -91,9 +91,7 @@ import com.phototidy.util.toPhotoDateTime
  */
 data class ScopeOption(
     val scope: MediaScope,
-    /** 这个范围一共多少张。 */
-    val count: Int,
-    /** 其中还没整理的多少张 —— 行上真正显示的数字。 */
+    /** 这个范围仍待整理的张数。 */
     val remaining: Int,
     val group: ScopeGroup,
 )
@@ -608,20 +606,13 @@ private fun ScopePickerRow(option: ScopeOption, onPick: (MediaScope) -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            // 统一报「剩多少 / 一共多少」：只报一个数时，用户没法判断它是哪个口径 ——
-            // 而这正是这次被指出的问题（「返回上一级还是显示 15 张」）。
             Text(
                 text = stringResource(
-                    R.string.scope_remaining_of_total,
+                    R.string.scope_pending_count,
                     option.remaining.grouped(),
-                    option.count.grouped(),
                 ),
                 style = MaterialTheme.typography.labelMedium,
-                color = if (option.remaining == 0) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

@@ -350,38 +350,35 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                         reviewScope.key,
                         libraryState.albums,
                         libraryState.months,
-                        libraryState.totalCount,
                         libraryState.remainingTotal,
-                        libraryState.screenshotCount,
                         libraryState.screenshotRemaining,
                     ) {
                         buildList {
                             // 前两项是「快捷范围」，与「最近」同组渲染（不带分区标题）——
                             // 它们永远是少数几个、而且是最常用的入口。
-                            add(
-                                ScopeOption(
-                                    scope = MediaScope.Recent,
-                                    count = libraryState.totalCount,
-                                    remaining = libraryState.remainingTotal,
-                                    group = ScopeGroup.Recent,
-                                ),
-                            )
-                            // 一张截图都没有就不给入口：列一行「截图 · 剩 0 / 0」没有意义
-                            if (libraryState.screenshotCount > 0) {
+                            if (libraryState.remainingTotal > 0) {
+                                add(
+                                    ScopeOption(
+                                        scope = MediaScope.Recent,
+                                        remaining = libraryState.remainingTotal,
+                                        group = ScopeGroup.Recent,
+                                    ),
+                                )
+                            }
+                            // 没有待整理截图时不显示已完成范围。
+                            if (libraryState.screenshotRemaining > 0) {
                                 add(
                                     ScopeOption(
                                         scope = MediaScope.Screenshots,
-                                        count = libraryState.screenshotCount,
                                         remaining = libraryState.screenshotRemaining,
                                         group = ScopeGroup.Recent,
                                     ),
                                 )
                             }
-                            libraryState.albums.forEach { album ->
+                            libraryState.albums.filter { it.remaining > 0 }.forEach { album ->
                                 add(
                                     ScopeOption(
                                         scope = MediaScope.Album(album.bucketId, album.name),
-                                        count = album.count,
                                         remaining = album.remaining,
                                         group = ScopeGroup.Album,
                                     ),
@@ -391,7 +388,6 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                                 add(
                                     ScopeOption(
                                         scope = MediaScope.Month(month.year, month.month),
-                                        count = month.count,
                                         remaining = month.remaining,
                                         group = ScopeGroup.Month,
                                     ),

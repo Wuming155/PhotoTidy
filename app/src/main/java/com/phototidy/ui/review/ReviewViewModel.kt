@@ -12,6 +12,8 @@ import com.phototidy.core.media.MediaOpCoordinator
 import com.phototidy.core.media.MediaRepository
 import com.phototidy.core.media.computeTargetPath
 import com.phototidy.core.media.isImageDestinationLegal
+import com.phototidy.core.media.isOrganizationSourcePath
+import com.phototidy.core.media.isSystemMoveTargetPath
 import com.phototidy.core.media.newAlbumIssue
 import com.phototidy.core.media.newAlbumPath
 import com.phototidy.core.media.SessionStore
@@ -738,11 +740,11 @@ class ReviewViewModel(
                 return@launch
             }
 
-            // 已整理的照片不再进队列 —— 这是「已整理 / 未整理」在行为上的落点：
-            // 首页数字减下去不算数，用户再进来时必须真的看不到它们。
-            // 它们被滤掉但仍然算作「已取到」，所以翻页水位照常推进，不会卡在同一个 offset。
+            // 只将收件箱目录中尚未记账的照片放入队列；其他真实相册里的照片视为已归类。
+            // 过滤项仍算作「已取到」，所以翻页水位照常推进，不会卡在同一个 offset。
             queue.acceptPage(page, PAGE_SIZE) { image ->
-                ignoreLedger || !reviewed.contains(image.id)
+                isOrganizationSourcePath(image.relativePath) &&
+                    (ignoreLedger || !reviewed.contains(image.id))
             }
 
             // 整页都是已整理的照片：窗口没长，但数据源还没到头 —— 立刻再补一页，
@@ -870,7 +872,11 @@ class ReviewViewModel(
             val knownTargets = _state.value.moveTargets
                 .mapTo(HashSet()) { it.relativePath.trim('/') }
             val restoredTargets = snapshot
-                .filter { isImageDestinationLegal(it.targetPath) }
+                .filter {
+                    isImageDestinationLegal(it.targetPath) &&
+                        !isSystemMoveTargetPath(it.targetPath) &&
+                        !isSystemMoveTargetPath(it.albumPath)
+                }
                 .map { move ->
                     MediaAlbum(
                         bucketId = move.bucketId,
@@ -950,8 +956,7 @@ class ReviewViewModel(
         /**
          * 会话内新建相册的 bucketId 起点。
          *
-         * 与 `LibraryViewModel.SYNTHETIC_BUCKET_BASE`（标准目录，`Long.MIN_VALUE + n`）分开，
-         * 也远在 Int32 真实 BUCKET_ID 之外 —— 快捷移动条按 `bucketId:name` 做 LazyRow key，
+         * 远在 Int32 真实 BUCKET_ID 之外 —— 快捷移动条按 `bucketId:name` 做 LazyRow key，
          * 撞车会直接因 key 重复崩溃。
          */
         private const val NEW_ALBUM_BUCKET_BASE = Long.MIN_VALUE / 2

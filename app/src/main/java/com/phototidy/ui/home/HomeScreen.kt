@@ -52,8 +52,6 @@ import com.phototidy.ui.components.EmptyState
 import com.phototidy.ui.components.LibraryImage
 import com.phototidy.ui.components.SectionHeader
 import com.phototidy.ui.components.TinyBadge
-import com.phototidy.ui.components.photosLabel
-import com.phototidy.ui.components.remainingCompactLabel
 import com.phototidy.ui.components.remainingLabel
 import com.phototidy.ui.theme.PhotoCardShape
 import com.phototidy.util.toReadableSize
@@ -76,19 +74,16 @@ fun HomeScreen(
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
-    val sizeLabel = state.totalBytes.toReadableSize()
-    // 主数字是「还剩多少要整理」。全都整理完了才退回去报总数，否则屏幕上会出现
-    // 一个恒为 0 的数字，看起来像照片丢了。
-    val countLabel = if (state.remainingTotal > 0) {
-        remainingLabel(state.remainingTotal)
-    } else {
-        photosLabel(state.totalCount)
-    }
+    val pendingSizeLabel = state.remainingBytes.toReadableSize()
+    val heroCountLabel = stringResource(
+        R.string.home_hero_pending,
+        remainingLabel(state.remainingTotal),
+    )
 
     // 截图磁贴上的数字。必须在 `LazyColumn` 的**外面**算：`LazyListScope` 的
     // content lambda 不是组合上下文，把 `stringResource` 之类放进去直接编译不过。
-    val screenshotBadge = if (state.screenshotCount > 0) {
-        remainingCompactLabel(state.screenshotRemaining, state.screenshotCount)
+    val screenshotBadge = if (state.screenshotRemaining > 0) {
+        remainingLabel(state.screenshotRemaining)
     } else {
         null
     }
@@ -114,15 +109,13 @@ fun HomeScreen(
                     )
                     Text(
                         text = when {
-                            state.totalCount == 0 -> stringResource(R.string.home_subtitle_empty)
-                            state.remainingTotal == 0 ->
-                                stringResource(R.string.home_subtitle_done, sizeLabel)
-
-                            else -> stringResource(
-                                R.string.home_subtitle_remaining,
+                            state.remainingTotal > 0 -> stringResource(
+                                R.string.home_subtitle_pending,
                                 remainingLabel(state.remainingTotal),
-                                sizeLabel,
+                                pendingSizeLabel,
                             )
+                            state.totalCount == 0 -> stringResource(R.string.home_subtitle_empty)
+                            else -> stringResource(R.string.home_subtitle_all_done)
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -146,18 +139,33 @@ fun HomeScreen(
         }
 
         // ---------------------------------------------------------- 封面卡片
-        item(key = "hero") {
-            HeroCard(
-                cover = state.newest,
-                countLabel = countLabel,
-                // 徽标只在真的「整理过一些」时才说「继续整理」——以前它是写死的，
-                // 全新安装也会显示「继续整理」，与首屏的事实不符。
-                badgeLabel = stringResource(
-                    if (state.reviewedCount > 0) R.string.home_hero_badge else R.string.home_hero_action,
-                ),
-                onClick = { onOpenScope(MediaScope.Recent) },
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
+        if (state.remainingTotal > 0) {
+            item(key = "hero") {
+                HeroCard(
+                    cover = state.newestPending,
+                    countLabel = heroCountLabel,
+                    // 徽标只在真的「整理过一些」时才说「继续整理」。
+                    badgeLabel = stringResource(
+                        if (state.reviewedCount > 0) R.string.home_hero_badge else R.string.home_hero_action,
+                    ),
+                    onClick = { onOpenScope(MediaScope.Recent) },
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+        } else if (state.totalCount > 0) {
+            item(key = "all-done") {
+                EmptyState(
+                    icon = Icons.Rounded.PhotoLibrary,
+                    title = stringResource(R.string.home_all_done_title),
+                    description = stringResource(R.string.home_all_done_desc),
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
+                    action = {
+                        TextButton(onClick = onOpenAlbums) {
+                            Text(stringResource(R.string.home_view_albums))
+                        }
+                    },
+                )
+            }
         }
 
         // ---------------------------------------------------------- 快捷分类
@@ -237,9 +245,10 @@ fun HomeScreen(
         }
 
         // ---------------------------------------------------------- 文件夹
-        // 相册全部来自 `loadOverview` 的聚合，每一项都至少有一张照片 ——
-        // MediaStore 里没有「空目录」这种实体，所以这里不存在「要不要显示 0 张的相册」这个问题。
+        // 整理页仅展示仍有待整理照片的目录，完整相册列表留在「相册」页。
         val folders = state.albums
+            .filter { it.remaining > 0 }
+            .sortedByDescending { it.pendingCover?.takenAtMillis ?: 0L }
         if (folders.isNotEmpty()) {
             item(key = "folders-header") {
                 SectionHeader(
@@ -258,6 +267,7 @@ fun HomeScreen(
                     album = album,
                     onClick = { onOpenScope(MediaScope.Album(album.bucketId, album.name)) },
                     modifier = Modifier.padding(horizontal = 16.dp),
+                    pendingOnly = true,
                 )
             }
         }
@@ -501,16 +511,11 @@ private fun MonthCard(month: MonthGroup, onClick: () -> Unit) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // 瓦片很窄，用紧凑写法；但口径保持一致 —— 一律「剩 N / M」，
-                // 绝不在这里退回「N 张」这种看不出口径的写法。
+                // 整理首页只显示待整理数量，不把已整理照片计入这个入口的数字。
                 Text(
-                    text = remainingCompactLabel(month.remaining, month.count),
+                    text = remainingLabel(month.remaining),
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (month.remaining == 0) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

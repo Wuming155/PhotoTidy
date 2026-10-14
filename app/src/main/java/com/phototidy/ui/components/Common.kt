@@ -214,6 +214,7 @@ fun AlbumRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     showPath: Boolean = false,
+    pendingOnly: Boolean = false,
 ) {
     Surface(
         onClick = onClick,
@@ -226,7 +227,7 @@ fun AlbumRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             LibraryImage(
-                image = album.cover,
+                image = if (pendingOnly) album.pendingCover else album.cover,
                 contentDescription = null,
                 modifier = Modifier
                     .size(56.dp)
@@ -241,8 +242,11 @@ fun AlbumRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // 主数字同样是「还剩多少要整理」，口径与首页/范围菜单一致：一律「剩 N · 共 M」。
-                val countLabel = remainingOfTotalLabel(album.remaining, album.count)
+                val countLabel = if (pendingOnly) {
+                    remainingLabel(album.remaining)
+                } else {
+                    remainingOfTotalLabel(album.remaining, album.count)
+                }
                 Text(
                     text = if (showPath && album.relativePath.isNotBlank()) {
                         // 路径是设备事实，保持原样；数量词走本地化

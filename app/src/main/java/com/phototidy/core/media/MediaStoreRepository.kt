@@ -34,21 +34,22 @@ import java.time.ZoneId
  * 冷启动还要为此分配 12.5 万个对象。
  *
  * 现在改成：**一次游标扫描只累积计数与封面**，内存占用与照片总数解耦 ——
- * 只在每个相册/月份的第一行（也就是最新那张）物化一个 MediaImage 当封面。
+ * 每个相册保留最新照片，每个月份只保留最新的未整理照片作整理入口预览。
  * 125000 张照片同样是几百个对象的开销。
  */
 data class LibraryOverview(
     val totalCount: Int,
     val totalBytes: Long,
-    /** 最新的一张，首页封面用。 */
-    val newest: MediaImage?,
+    val remainingBytes: Long,
+    /** 最新的一张未整理照片，整理页封面用。 */
+    val newestPending: MediaImage?,
     val albums: List<MediaAlbum>,
     val months: List<MonthGroup>,
 ) {
     val isEmpty: Boolean get() = totalCount == 0
 
     /**
-     * 还没整理过的总张数。
+     * 仍待整理的照片总数：限定在默认来源目录，且尚未被整理账本记录。
      *
      * 由各月份聚合而来，而不是单独扫一遍 —— 全局待整理数恒等于所有月份待整理数之和
      * （每张照片恰好落在一个月里），再扫一次纯属浪费。
@@ -56,7 +57,7 @@ data class LibraryOverview(
     val remainingCount: Int get() = months.sumOf { it.remaining }
 
     companion object {
-        val Empty = LibraryOverview(0, 0L, null, emptyList(), emptyList())
+        val Empty = LibraryOverview(0, 0L, 0L, null, emptyList(), emptyList())
     }
 }
 
@@ -124,9 +125,11 @@ class MediaStoreRepository(
      * 这里改为「游标流式遍历 + Kotlin 侧累加」：只留计数和每组封面，
      * 既避开了厂商差异，也拿到了分页的内存收益。
      *
-     * 游标按拍摄时间倒序，所以**每个分组第一次出现的那一行就是该组最新的照片**，直接当封面。
+     * 游标按拍摄时间倒序，所以相册第一次出现的照片是最新照片，月份第一次出现的未整理照片
+     * 是最新待整理照片，分别用作相册封面与整理入口预览。
      *
-     * [isReviewed] 是「已整理」账本。顺手在同一个循环里算出每个相册 / 每个月份的**待整理**张数：
+     * [isReviewed] 是「已整理」账本。待整理来源限定为相机、截图、下载和共享图片根目录中
+     * 尚未记账的照片；已有真实相册视为已归类。顺手在同一个循环里算出每个相册 / 月份的待整理数：
      * 再扫一遍全库只为数出「还剩多少」，在 12.5 万张的库上要多花一次完整扫描的时间，不值。
      */
     suspend fun loadOverview(isReviewed: (Long) -> Boolean = { false }): LibraryOverview =
@@ -136,7 +139,8 @@ class MediaStoreRepository(
         val zone = ZoneId.systemDefault()
         var total = 0
         var bytes = 0L
-        var newest: MediaImage? = null
+        var remainingBytes = 0L
+        var newestPending: MediaImage? = null
 
         // 月份窗口缓存。游标按拍摄时间倒序，绝大多数行都落在上一次算好的月份区间里，
         // 只有跨月（以及 DATE_TAKEN 缺失、退化用 DATE_ADDED 的乱序段）才需要重新做时区换算。
@@ -152,17 +156,18 @@ class MediaStoreRepository(
                 val taken = c.takenAt(cols)
                 val bucketId = c.getLong(cols.bucket)
                 val size = c.getLong(cols.size)
+                val reviewed = isReviewed(c.getLong(cols.id))
 
                 total++
                 bytes += size
-                if (newest == null) newest = c.toImage(cols)
+                if (!reviewed && newestPending == null) newestPending = c.toImage(cols)
 
                 // 命中判定按值校验区间而非假设游标单调：即便日期口径分叉导致乱序，
                 // 也只是多算几次窗口，不会把照片分错月份
                 val w = window?.takeIf { taken >= it.startMillis && taken < it.endMillisExclusive }
                     ?: monthWindowAt(taken, zone).also { window = it }
                 val month = months.getOrPut(w.key) {
-                    MonthAcc(year = w.year, month = w.month, cover = c.toImage(cols))
+                    MonthAcc(year = w.year, month = w.month)
                 }
                 month.count++
 
@@ -178,9 +183,13 @@ class MediaStoreRepository(
                 }
                 album.count++
 
-                if (!isReviewed(c.getLong(cols.id))) {
+                if (!reviewed && isOrganizationSourcePath(album.path)) {
+                    remainingBytes += size
                     month.remaining++
+                    if (newestPending == null) newestPending = c.toImage(cols)
+                    if (month.cover == null) month.cover = c.toImage(cols)
                     album.remaining++
+                    if (album.pendingCover == null) album.pendingCover = c.toImage(cols)
                 }
             }
         }
@@ -188,7 +197,8 @@ class MediaStoreRepository(
         LibraryOverview(
             totalCount = total,
             totalBytes = bytes,
-            newest = newest,
+            remainingBytes = remainingBytes,
+            newestPending = newestPending,
             albums = albums.map { (bucketId, acc) ->
                 MediaAlbum(
                     bucketId = bucketId,
@@ -197,6 +207,7 @@ class MediaStoreRepository(
                     count = acc.count,
                     cover = acc.cover,
                     remaining = acc.remaining,
+                    pendingCover = acc.pendingCover,
                 )
             }
                 // 用「最新一张照片的时间」排序：刚拍完的相册就该排在最前面
@@ -684,9 +695,15 @@ class MediaStoreRepository(
 
         /** 其中还没整理过的张数。 */
         var remaining: Int = 0
+
+        /** 该相册最新的一张未整理照片；完整相册页使用 [cover]。 */
+        var pendingCover: MediaImage? = null
     }
 
-    private class MonthAcc(val year: Int, val month: Int, val cover: MediaImage) {
+    private class MonthAcc(val year: Int, val month: Int) {
+        /** 该月最新的一张未整理照片；完结月份为 null。 */
+        var cover: MediaImage? = null
+
         var count: Int = 0
 
         /** 其中还没整理过的张数。 */
@@ -842,6 +859,46 @@ fun isImageDestinationLegal(relativePath: String): Boolean {
     val top = relativePath.trim('/').substringBefore('/')
     return top.equals("DCIM", ignoreCase = true) || top.equals(IMAGE_ROOT, ignoreCase = true)
 }
+
+private fun normalizeMediaRelativePath(relativePath: String): String =
+    relativePath.split('/', '\\')
+        .filter(String::isNotBlank)
+        .joinToString("/") { it.lowercase() }
+
+/** 系统相册目录不作为整理时的归档目标；用路径识别，避免依赖 ROM 本地化后的名称。 */
+fun isSystemMoveTargetPath(relativePath: String): Boolean =
+    normalizeMediaRelativePath(relativePath) in SYSTEM_MOVE_TARGET_PATHS
+
+/**
+ * 这些默认来源目录中的未处理照片才进入「整理」队列。
+ * 相机/截图/下载是收件箱；自建或其他真实相册已经有明确归类，默认不再列为待整理。
+ */
+fun isOrganizationSourcePath(relativePath: String): Boolean {
+    val path = normalizeMediaRelativePath(relativePath)
+    return path in ORGANIZATION_SOURCE_ROOTS || ORGANIZATION_SOURCE_SUBTREES.any { root ->
+        path == root || path.startsWith("$root/")
+    }
+}
+
+private val ORGANIZATION_SOURCE_ROOTS = setOf("dcim", "pictures")
+
+private val ORGANIZATION_SOURCE_SUBTREES = setOf(
+    "dcim/camera",
+    "dcim/screenshots",
+    "pictures/screenshots",
+    "pictures/download",
+    "pictures/downloads",
+    "download",
+    "downloads",
+)
+
+private val SYSTEM_MOVE_TARGET_PATHS = setOf(
+    "dcim/camera",
+    "pictures/screenshots",
+    "dcim/screenshots",
+    "pictures/download",
+    "pictures/downloads",
+)
 
 /**
  * 计算落点目录。

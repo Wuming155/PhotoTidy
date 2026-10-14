@@ -22,7 +22,7 @@ import com.phototidy.core.media.ReviewedLedger
 import com.phototidy.core.media.SessionStore
 import com.phototidy.core.media.StagingTrash
 import com.phototidy.core.media.isImageDestinationLegal
-import com.phototidy.core.media.standardDirsMissing
+import com.phototidy.core.media.isSystemMoveTargetPath
 import com.phototidy.core.model.MediaAlbum
 import com.phototidy.core.model.MediaImage
 import com.phototidy.core.model.MediaScope
@@ -39,14 +39,6 @@ import kotlinx.coroutines.launch
 
 /** 系统回收站一次加载多少张。 */
 private const val TRASH_PAGE_SIZE = 200
-
-/**
- * 合成相册（系统标准目录）bucketId 的哨兵区间起点。
- *
- * 真实 BUCKET_ID 是 int32 的路径哈希，永远落在 Int32 表示范围内；
- * 从 [Long.MIN_VALUE] 起步的区间与它数学上无交，合成 id 不可能与真实相册撞车。
- */
-private const val SYNTHETIC_BUCKET_BASE = Long.MIN_VALUE + 1L
 
 data class LibraryUiState(
     /**
@@ -82,25 +74,25 @@ data class LibraryUiState(
 ) {
     val albums: List<MediaAlbum> get() = overview?.albums.orEmpty()
 
-    val months: List<MonthGroup> get() = overview?.months.orEmpty()
+    /** 整理入口只列仍有未处理照片的月份；完整照片库仍保存在 [overview] 中供浏览。 */
+    val months: List<MonthGroup> get() = overview?.months.orEmpty().filter { it.remaining > 0 }
 
     val totalCount: Int get() = overview?.totalCount ?: 0
 
     /**
-     * 还没整理过的总张数 —— 首页所有数字的主口径。
-     *
-     * 与参考实现一致：用户要看的是「还剩多少要整理」；照片总数降为副信息。
-     * 口径上与 [totalCount] 的区别只有一条 —— 扣掉「已整理」账本里的照片。
+     * 默认来源目录中、尚未被整理账本记录的照片数；整理首页只展示这部分。
+     * 自建相册里的照片视为已归类，完整库总数仍由 [totalCount] 提供给相册页。
      */
     val remainingTotal: Int get() = overview?.remainingCount ?: 0
 
-    val totalBytes: Long get() = overview?.totalBytes ?: 0L
+    /** 整理页只展示待整理照片占用的空间。 */
+    val remainingBytes: Long get() = overview?.remainingBytes ?: 0L
 
     /** 已整理的总张数，首页入口上的数字。 */
     val reviewedCount: Int get() = (totalCount - remainingTotal).coerceAtLeast(0)
 
-    /** 最新的一张，首页封面用。 */
-    val newest: MediaImage? get() = overview?.newest
+    /** 最新的一张待整理照片，整理页封面用。 */
+    val newestPending: MediaImage? get() = overview?.newestPending
 
     val hasLibrary: Boolean get() = totalCount > 0
 
@@ -526,42 +518,15 @@ class LibraryViewModel(
     fun pageLoader(scope: MediaScope): suspend (Int, Int) -> List<MediaImage> =
         { offset, limit -> repo.pageImages(scope, offset, limit) }
 
-    /** 整理页里可选的「移动目标」：所有相册 + 系统标准目录。 */
+    /** 整理页里可选的「移动目标」：真实相册；系统标准目录不作为归档目标。 */
     fun moveTargets(currentScope: MediaScope): List<MediaAlbum> {
-        // 只留图片真正落得进去的相册：MediaProvider 只接受 DCIM/ 与 Pictures/ 两棵子树。
-        // 把 Download/ 这类目录列成目标，用户滑一下、排好队、点提交，换来的是一句
-        // 系统异常 —— 目标从一开始就不可能达成，就不该出现在这里。
+        // 只留图片真正落得进去的 DCIM/ 与 Pictures/ 目录，并排除系统默认相册。
         val existing = _state.value.albums
             .filter { it.canReceive && isImageDestinationLegal(it.relativePath) }
+            .filterNot { isSystemMoveTargetPath(it.relativePath) }
         val excludeBucket = (currentScope as? MediaScope.Album)?.bucketId
         val fromDevice = existing.filter { it.bucketId != excludeBucket }
-
-        // 补上系统标准目录，即使用户还没有照片放进去，也允许把照片归到这些位置。
-        // 去重**按路径**（见 standardDirsMissing）：按名字去重会让同名的真实目录把标准目录挤掉，
-        // 结果是一个合法落点反而选不到。标签重名的展示问题由 AlbumQuickMoveBar 补路径解决。
-        // P6：传入未排除的完整列表 `existing` —— 排除当前相册只作用于 `fromDevice`，
-        // 若拿 `fromDevice` 判重，当前相册被排除后会被误判为「缺失」再合成回来，
-        // 结果排出一个目标路径等于当前路径的 PendingMove（提交时幂等写原值并计为成功）。
-        // 传完整列表可同时满足「当前相册不出现在目标里」与「标准目录不被同名真实目录挤掉」。
-        // bucketId 落在 Int32 表示范围之外的哨兵区间：真实 BUCKET_ID 本质是 int32 的
-        // 路径哈希，完全可能为负 —— 任何按名字算出来的负 id 都有概率与真实相册撞车，
-        // 撞上会让快捷移动条（LazyRow 按 bucketId 做 key）直接因 key 重复而崩溃。
-        val standard = listOf(
-            res.getString(R.string.album_camera) to "DCIM/Camera",
-            res.getString(R.string.album_screenshots) to "Pictures/Screenshots",
-            res.getString(R.string.album_downloads) to "Pictures/Downloads",
-        )
-        val missing = standardDirsMissing(existing, standard)
-            .mapIndexed { index, (name, path) ->
-                MediaAlbum(
-                    bucketId = SYNTHETIC_BUCKET_BASE + index,
-                    name = name,
-                    relativePath = path,
-                    count = 0,
-                    cover = null,
-                )
-            }
-        return fromDevice + missing
+        return fromDevice
     }
 
     // ------------------------------------------------------ 系统回收站
