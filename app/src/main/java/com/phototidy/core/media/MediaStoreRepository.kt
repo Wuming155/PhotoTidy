@@ -246,47 +246,73 @@ class MediaStoreRepository(
     }
 
     /**
-     * 找出**文件大小相同**的照片 id（重复检测的粗筛）。
+     * 流式找出**文件大小相同**的照片组，供重复检测使用。
      *
-     * 分两趟游标：
-     *  1) 第一趟只数「每个大小出现过几次」，用 `HashMap<Long, Int>`；
-     *  2) 只有当确实存在 `count >= 2` 的大小时，才走第二趟把那些 id 收出来。
-     *
-     * 为什么不分一趟就 `HashMap<Long, MutableList<Long>>`：12.5 万张照片会造出 12.5 万个
-     * 单元素 ArrayList（每张照片一个），是几十 MB 的瞬时垃圾；而绝大多数照片库
-     * 根本没有重复 —— 第二趟在正常情况下压根不会跑。
-     *
-     * 不做 SQL `GROUP BY`：需要拼原始 SQL 片段，各厂商 MediaProvider 行为不一致，
-     * 这个坑本项目已经踩过一次（见 [loadOverview] 的注释）。
+     * 按 SIZE 排序后，同大小照片在游标中相邻，只需暂存当前一组；[maxCandidateCount]
+     * 同时限制返回的照片总数，因此大候选组和全库唯一大小集合都不会被整体物化。
+     * Finder 的哈希预算也是同一个上限，避免候选列表大于实际可处理量。
      */
-    suspend fun findSizeCandidates(): Map<Long, List<Long>> = withContext(Dispatchers.IO) {
-        val counts = HashMap<Long, Int>()
-        openCursor(selection = VISIBLE, onlyTrashed = false, projection = ID_SIZE)?.use { c ->
-            val idCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-            val sizeCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
-            while (c.moveToNext()) {
-                val size = c.getLong(sizeCol)
-                // 大小为 0 的照片（统计不到的）不能当重复的证据
-                if (size <= 0L) continue
-                counts[size] = (counts[size] ?: 0) + 1
-            }
-        }
-        val colliding = counts.filterValues { it >= 2 }.keys
-        if (colliding.isEmpty()) return@withContext emptyMap()
+    suspend fun findDuplicateCandidates(maxCandidateCount: Int): Map<Long, List<Long>> =
+        withContext(Dispatchers.IO) {
+            if (maxCandidateCount < 2) return@withContext emptyMap()
 
-        val out = HashMap<Long, MutableList<Long>>(colliding.size * 2)
-        openCursor(selection = VISIBLE, onlyTrashed = false, projection = ID_SIZE)?.use { c ->
-            val idCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-            val sizeCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
-            while (c.moveToNext()) {
-                val size = c.getLong(sizeCol)
-                if (size !in colliding) continue
-                val id = c.getLong(idCol)
-                (out[size] ?: ArrayList<Long>(4).also { out[size] = it }).add(id)
+            val groups = LinkedHashMap<Long, List<Long>>()
+            var collected = 0
+            var currentSize: Long? = null
+            var firstId = 0L
+            var currentGroup: ArrayList<Long>? = null
+
+            openCursor(
+                selection = VISIBLE,
+                onlyTrashed = false,
+                projection = ID_SIZE,
+                sortOrder = SIZE_CANDIDATE_SORT_ORDER,
+            )?.use { c ->
+                val idCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val sizeCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                while (c.moveToNext()) {
+                    val size = c.getLong(sizeCol)
+                    if (size <= 0L) continue
+                    val id = c.getLong(idCol)
+
+                    if (currentSize == null || size != currentSize) {
+                        val previousGroup = currentGroup
+                        if (previousGroup != null) {
+                            groups[currentSize!!] = previousGroup
+                            collected += previousGroup.size
+                            if (collected >= maxCandidateCount) break
+                        }
+                        currentGroup = null
+                        if (maxCandidateCount - collected < 2) break
+                        currentSize = size
+                        firstId = id
+                        continue
+                    }
+
+                    val remaining = maxCandidateCount - collected
+                    // 至少两个同尺寸照片才有资格成为候选组。
+                    if (remaining < 2) break
+
+                    val group = currentGroup
+                    if (group == null) {
+                        // 唯一尺寸只保留一个原始 ID，不为每行创建 List 或 MediaImage。
+                        currentGroup = arrayListOf(firstId, id)
+                    } else if (group.size < remaining) {
+                        group.add(id)
+                    } else {
+                        // 当前同尺寸组已经填满剩余预算；不再收集超预算的 ID。
+                        groups[size] = group
+                        collected += group.size
+                        break
+                    }
+                }
             }
+
+            currentGroup?.let { group ->
+                if (collected < maxCandidateCount) groups[currentSize!!] = group
+            }
+            groups
         }
-        out
-    }
 
     /**
      * 取某一范围内的一页照片。
@@ -579,6 +605,7 @@ class MediaStoreRepository(
         onlyIdColumn: Boolean = false,
         /** 自定义投影（例如只取 `_ID` + `SIZE`）；缺省用完整 [PROJECTION]。 */
         projection: Array<String>? = null,
+        sortOrder: String = SORT_ORDER,
     ): Cursor? {
         val args = Bundle().apply {
             if (onlyTrashed != null) {
@@ -593,7 +620,7 @@ class MediaStoreRepository(
             if (!selectionArgs.isNullOrEmpty()) {
                 putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
             }
-            putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, SORT_ORDER)
+            putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
             if (limit != null) putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
             if (offset != null) putInt(ContentResolver.QUERY_ARG_OFFSET, offset)
         }
@@ -726,6 +753,11 @@ class MediaStoreRepository(
             "${MediaStore.MediaColumns.DATE_TAKEN} DESC," +
                 " ${MediaStore.MediaColumns.DATE_ADDED} DESC," +
                 " ${MediaStore.MediaColumns._ID} DESC"
+
+        /** 按大小流式分组，并在组内沿用照片的默认新旧顺序。 */
+        const val SIZE_CANDIDATE_SORT_ORDER =
+            "${MediaStore.MediaColumns.SIZE} ASC, ${MediaStore.MediaColumns.DATE_TAKEN} DESC," +
+                " ${MediaStore.MediaColumns.DATE_ADDED} DESC, ${MediaStore.MediaColumns._ID} DESC"
     }
 }
 

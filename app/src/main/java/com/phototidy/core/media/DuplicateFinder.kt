@@ -32,7 +32,7 @@ data class DuplicateGroup(
  *
  * 两级判据，先便宜后昂贵：
  *  1) **文件大小**：一次游标扫描就能分组，零解码开销
- *     （见 [MediaStoreRepository.findSizeCandidates]）。**只把字节数完全相同的候选送进来** ——
+ *     （见 [MediaStoreRepository.findDuplicateCandidates]）。**只把字节数完全相同的候选送进来** ——
  *     大小不同的两张照片不可能是同一张，而重新编码、元数据差异、轻微缩放的副本
  *     字节数必然不同，因此在进入 dHash 之前已被筛掉。
  *  2) **感知哈希（dHash）**：只对大小相同的候选算。把图缩到 9×8 灰度、
@@ -63,7 +63,9 @@ class DuplicateFinder(
      * 放在主线程会让界面僵住几秒（照片多的时候更久）。
      */
     suspend fun findDuplicates(): List<DuplicateGroup> = withContext(Dispatchers.IO) {
-        val candidates = repo.findSizeCandidates()
+        // 仓库按大小流式扫描，并把候选照片数限制到同一份哈希预算；
+        // 不会先构造整库的候选 ID 表或一次性读取超大的同尺寸组。
+        val candidates = repo.findDuplicateCandidates(MAX_HASHES)
         if (candidates.isEmpty()) return@withContext emptyList()
 
         // 计算量的硬上限。做到一半被打断比「等到天荒地老」更糟，
@@ -71,15 +73,15 @@ class DuplicateFinder(
         var budget = MAX_HASHES
         val groups = ArrayList<DuplicateGroup>()
 
-        for ((_, ids) in candidates) {
+        for ((size, ids) in candidates) {
             coroutineContext.ensureActive()
             if (budget <= 0) break
             val images = runCatchingUnlessCancelled { repo.imagesByIds(ids) }
-                .onFailure { Log.w(TAG, "candidate query failed for ids: $ids", it) }
+                .onFailure { Log.w(TAG, "candidate query failed for size $size", it) }
                 .getOrDefault(emptyList())
             if (images.size < 2) continue
 
-            val fingerprinted = ArrayList<Triple<Long, Int, MediaImage>>(images.size)
+            val fingerprinted = ArrayList<Triple<Long, Int, MediaImage>>(minOf(images.size, budget))
             for (image in images) {
                 coroutineContext.ensureActive()
                 if (budget <= 0) break
