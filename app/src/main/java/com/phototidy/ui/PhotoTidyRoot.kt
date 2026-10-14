@@ -80,6 +80,7 @@ import com.phototidy.ui.review.ScopeGroup
 import com.phototidy.ui.review.ScopeOption
 import com.phototidy.ui.settings.SettingsScreen
 import com.phototidy.ui.trash.TrashScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -169,7 +170,12 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
     }
     LaunchedEffect(Unit) {
         Graph.mediaOps.messages.collect { message ->
-            snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Long)
+            val snackbarJob = launch {
+                snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Indefinite)
+            }
+            delay(350L)
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarJob.join()
         }
     }
 
