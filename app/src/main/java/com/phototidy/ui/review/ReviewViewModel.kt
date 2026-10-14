@@ -207,12 +207,12 @@ class ReviewViewModel(
     private var keptCount = 0
 
     /**
-     * 「再来一轮」：本次会话忽略账本，把这一范围的照片从头再放一遍。
+     * 相册页明确打开文件夹，以及「再来一轮」都会忽略账本，把范围内照片放入队列。
      *
      * 刻意**不**去删账本里的记录 —— 重看一遍不等于「这些又变回没整理过」，
      * 用户滑到一半退出去，再进来看到的仍应该是「已整理」的状态。
      */
-    private var ignoreLedger = false
+    private var ignoreLedger = (scope as? MediaScope.Album)?.browseAll == true
 
     private val _state = MutableStateFlow(
         ReviewUiState(
@@ -740,10 +740,11 @@ class ReviewViewModel(
                 return@launch
             }
 
-            // 只将收件箱目录中尚未记账的照片放入队列；其他真实相册里的照片视为已归类。
+            // 默认只整理收件箱中尚未记账的照片；从相册页明确进入时，则允许整理该相册全部照片。
             // 过滤项仍算作「已取到」，所以翻页水位照常推进，不会卡在同一个 offset。
             queue.acceptPage(page, PAGE_SIZE) { image ->
-                isOrganizationSourcePath(image.relativePath) &&
+                ((scope as? MediaScope.Album)?.browseAll == true ||
+                    isOrganizationSourcePath(image.relativePath)) &&
                     (ignoreLedger || !reviewed.contains(image.id))
             }
 

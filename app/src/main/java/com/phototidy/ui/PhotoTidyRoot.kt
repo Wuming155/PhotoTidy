@@ -384,11 +384,19 @@ fun PhotoTidyRoot(settingsStore: SettingsStore) {
                                     ),
                                 )
                             }
-                            libraryState.albums.filter { it.remaining > 0 }.forEach { album ->
+                            libraryState.albums.filter { album ->
+                                album.remaining > 0 ||
+                                    ((reviewScope as? MediaScope.Album)?.let {
+                                        it.browseAll && it.bucketId == album.bucketId
+                                    } == true)
+                            }.forEach { album ->
+                                val browseAll = (reviewScope as? MediaScope.Album)?.let {
+                                    it.browseAll && it.bucketId == album.bucketId
+                                } == true
                                 add(
                                     ScopeOption(
-                                        scope = MediaScope.Album(album.bucketId, album.name),
-                                        remaining = album.remaining,
+                                        scope = MediaScope.Album(album.bucketId, album.name, browseAll),
+                                        remaining = if (browseAll) album.count else album.remaining,
                                         group = ScopeGroup.Album,
                                     ),
                                 )

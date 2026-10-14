@@ -508,8 +508,8 @@ class LibraryViewModel(
     fun scopeRemaining(scope: MediaScope): Int = when (scope) {
         MediaScope.Recent -> _state.value.remainingTotal
         MediaScope.Screenshots -> _state.value.screenshotRemaining
-        is MediaScope.Album -> _state.value.albums
-            .firstOrNull { it.bucketId == scope.bucketId }?.remaining ?: 0
+        is MediaScope.Album -> _state.value.albums.firstOrNull { it.bucketId == scope.bucketId }
+            ?.let { if (scope.browseAll) it.count else it.remaining } ?: 0
 
         is MediaScope.Month -> _state.value.months
             .firstOrNull { it.year == scope.year && it.month == scope.month }?.remaining ?: 0

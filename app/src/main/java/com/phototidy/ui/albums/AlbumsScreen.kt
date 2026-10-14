@@ -110,7 +110,7 @@ fun AlbumsScreen(
         // bucketId 天然唯一（MediaStore 聚合产出，无合成相册），无需组合 key
         items(items = albums, key = { it.bucketId }) { album ->
             AlbumTile(album = album, onClick = {
-                onOpenAlbum(MediaScope.Album(album.bucketId, album.name))
+                onOpenAlbum(MediaScope.Album(album.bucketId, album.name, browseAll = true))
             })
         }
 

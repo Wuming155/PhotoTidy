@@ -117,8 +117,17 @@ sealed interface MediaScope {
         override val key: String = "month:$year:$month"
     }
 
-    data class Album(val bucketId: Long, val name: String) : MediaScope {
-        override val key: String = "album:$bucketId:$name"
+    data class Album(
+        val bucketId: Long,
+        val name: String,
+        /** 从相册页明确进入时允许整理已归类目录中的照片。 */
+        val browseAll: Boolean = false,
+    ) : MediaScope {
+        override val key: String = if (browseAll) {
+            "album-all:$bucketId:$name"
+        } else {
+            "album:$bucketId:$name"
+        }
     }
 
     companion object {
@@ -140,6 +149,10 @@ sealed interface MediaScope {
             raw.isNullOrBlank() -> null
             raw == "recent" -> MediaScope.Recent
             raw == "screenshots" -> MediaScope.Screenshots
+            raw.startsWith("album-all:") -> raw.removePrefix("album-all:").split(":", limit = 2).let { parts ->
+                val bucketId = parts.getOrNull(0)?.toLongOrNull() ?: return null
+                Album(bucketId, parts.getOrNull(1).orEmpty(), browseAll = true)
+            }
             raw.startsWith("month:") -> raw.removePrefix("month:").split(":").let { parts ->
                 val year = parts.getOrNull(0)?.toIntOrNull() ?: return null
                 val month = parts.getOrNull(1)?.toIntOrNull() ?: return null
